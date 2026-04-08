@@ -1,0 +1,19 @@
+{
+  "name": "omnilist",
+  "version": "0.1.0",
+  "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev --workspace @omnilist/web",
+    "dev:api": "npm run dev --workspace @omnilist/api",
+    "db:generate": "npm run db:generate --workspace @omnilist/api",
+    "db:migrate": "npm run db:migrate --workspace @omnilist/api",
+    "db:up": "docker compose up -d postgres",
+    "db:down": "docker compose down",
+    "typecheck": "npm run typecheck --workspaces",
+    "build": "npm run build --workspaces"
+  }
+}

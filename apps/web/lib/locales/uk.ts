@@ -1,0 +1,262 @@
+export const uk = {
+  meta: {
+    title: "OmniList",
+    description: "Створи один раз, публікуй всюди."
+  },
+  layout: {
+    language: "Мова",
+    localeNames: {
+      en: "English",
+      uk: "Українська",
+      ru: "Русский"
+    }
+  },
+  common: {
+    appName: "OmniList",
+    account: "Обліковий запис OmniList",
+    or: "або",
+    backToDashboard: "Назад до дашборду",
+    backToWorkspace: "Назад до робочого простору",
+    createProduct: "Створити товар",
+    editProduct: "Редагувати товар",
+    manageChannels: "Керувати каналами",
+    openProductWorkspace: "Відкрити робочий простір товару",
+    saveProduct: "Зберегти товар",
+    addFirstProduct: "Додати перший товар",
+    saveChannelSettings: "Зберегти налаштування каналу",
+    saving: "Збереження...",
+    refreshing: "Оновлення...",
+    type: "Тип",
+    region: "Регіон",
+    accountLabel: "Акаунт",
+    notConnectedYet: "Ще не підключено",
+    score: "Оцінка",
+    skuLabel: "SKU",
+    inStock: "в наявності",
+    recentJobs: "Останні задачі",
+    publishing: "Публікація",
+    canonicalProductModel: "Канонічна модель товару",
+    billing: "Білінг",
+    upgradeToPro: "Оновити до Pro",
+    managePlan: "Керувати планом",
+    currentPlan: "Поточний план"
+  },
+  channels: {
+    kindLabels: {
+      store: "Магазин",
+      marketplace: "Маркетплейс"
+    },
+    descriptions: {
+      shopify: "Підключений e-commerce канал і базовий каталог.",
+      ebay: "Сильний SMB-маркетплейс зі зрілою підтримкою лістингів і таксономії.",
+      etsy: "Маркетплейс із хорошим фітом для handmade, нішевих і креативних товарів."
+    }
+  },
+  statuses: {
+    connected: "Підключено",
+    disconnected: "Відключено",
+    attentionRequired: "Потрібна увага",
+    ready: "Готово",
+    needsAttention: "Потрібна увага",
+    queued: "У черзі",
+    processing: "Обробляється",
+    completed: "Завершено",
+    partial: "Частково",
+    failed: "Помилка",
+    published: "Опубліковано"
+  },
+  loginPage: {
+    title: "Увійдіть до свого кабінету продавця",
+    description: "Ваш каталог, підключення каналів і пайплайн публікації мають бути в приватному просторі, а не на спільній сторінці.",
+    needAccount: "Потрібен акаунт?",
+    createOne: "Створити"
+  },
+  registerPage: {
+    title: "Створіть свій персональний кабінет продавця",
+    description: "Реєстрація створює приватний workspace, тому товари й підключені канали належать авторизованому користувачу.",
+    alreadyHaveAccount: "Вже є акаунт?",
+    signIn: "Увійти"
+  },
+  authForm: {
+    name: "Ім'я",
+    workspaceName: "Назва workspace",
+    email: "Email",
+    password: "Пароль",
+    oauthFailed: "OAuth-вхід не вдався",
+    authFailed: "Не вдалося виконати автентифікацію.",
+    missingApi: "Запусти API на localhost:4000 або вкажи NEXT_PUBLIC_OMNILIST_API_URL.",
+    pleaseWait: "Зачекайте...",
+    signIn: "Увійти",
+    createAccount: "Створити акаунт"
+  },
+  socialAuth: {
+    continueWith: (providerName: string) => `Продовжити через ${providerName}`,
+    notConfigured: (providerName: string) => `${providerName} ще не налаштований`
+  },
+  logoutButton: {
+    signingOut: "Вихід...",
+    signOut: "Вийти"
+  },
+  dashboard: {
+    eyebrow: "OmniList MVP",
+    title: "Створи один раз. Публікуй впевнено.",
+    description: (workspaceName: string) =>
+      `${workspaceName} вже має перший реальний зріз кабінету продавця: канонічні товари, підключені канали, мультиканальну readiness-перевірку та зрозумілий фідбек перед публікацією.`,
+    signedInAs: (email: string) => `Вхід виконано як ${email}`,
+    stats: {
+      productsInCatalog: "Товарів у каталозі",
+      connectedChannels: "Підключених каналів",
+      listingsReadyNow: "Оголошень готово зараз",
+      productsRemaining: "Товарів залишилось",
+      listingsNeedingAttention: "Оголошень потребують уваги"
+    },
+    channelWorkspaceTitle: "Робочий простір каналів",
+    channelWorkspaceDescription: "Видимість того, які канали вже достатньо підготовлені для публікації.",
+    manageChannel: (channelName: string) => `Керувати ${channelName}`,
+    catalogSnapshotTitle: "Стан каталогу",
+    catalogSnapshotDescription: "Кожна картка показує готовність до публікації по каналах.",
+    workspaceReadyTitle: "Ваш workspace готовий",
+    workspaceReadyDescription: "Товарів ще немає. Створіть перший канонічний товар, а потім накладайте на нього publish flow.",
+    readyEverywhere: "Готово всюди",
+    channelsBlocked: (count: number) => `Заблоковано каналів: ${count}`,
+    categoryMappingMissing: "Мапінг категорії ще відсутній",
+    noIssuesDetected: "Для цього каналу проблем не виявлено.",
+    issuesToReview: (count: number) => `Потрібно переглянути проблем: ${count}.`,
+    publishCenterTitle: "Центр публікації",
+    publishCenterDescription: "Останні асинхронні задачі публікації у workspace.",
+    noPublishJobs: "Задач публікації ще немає. Відкрийте workspace товару, щоб почати."
+  },
+  channelsPage: {
+    eyebrow: "Робочий простір каналів",
+    title: "Підключайте канали продажу, не виходячи з кабінету.",
+    description: (workspaceName: string) =>
+      `${workspaceName} може керувати станом маркетплейсів з одного місця: ідентифікатор акаунта, режим синхронізації та робочі нотатки перед публікацією.`,
+    connected: (count: number) => `Підключено: ${count}`,
+    needsAttention: (count: number) => `Потребують уваги: ${count}`,
+    availableChannels: "Доступні канали",
+    connectedNow: "Підключено зараз",
+    needAttention: "Потрібна увага",
+    manageConnections: "Керування підключеннями",
+    manageConnectionsDescription: "Збережіть стан каналу зараз; пізніше сюди підключаться повні OAuth-адаптери."
+  },
+  channelManager: {
+    status: "Статус",
+    externalAccountId: "Зовнішній ID акаунта",
+    syncMode: "Режим синхронізації",
+    syncModeHint: "Приклади: `listing_only`, `listing_and_inventory`, `catalog_and_inventory`.",
+    internalNote: "Внутрішня нотатка",
+    notePlaceholder: "Потрібна повторна авторизація, очікує перевірки, підключено через саппорт тощо.",
+    connectionGuidance: "Пояснення по підключенню",
+    region: "Регіон",
+    guidanceDescription: "Використовуйте цю картку для відстеження зв'язку з акаунтом продавця до того, як ми підключимо повний OAuth/channel-specific flow.",
+    couldNotSave: "Не вдалося зберегти підключення каналу.",
+    savedConnection: (channelName: string) => `Підключення ${channelName} збережено.`
+  },
+  newProductPage: {
+    title: "Створити товар",
+    description: "Почніть з канонічного запису товару. Адаптація під конкретні канали буде накладена поверх цієї моделі."
+  },
+  editProductPage: {
+    title: "Редагувати товар",
+    description: "Спочатку оновіть канонічні дані товару. Readiness та якість публікації автоматично покращаться для кожного каналу."
+  },
+  productEditor: {
+    couldNotReadFile: "Не вдалося прочитати один із вибраних файлів зображень.",
+    missingApi: "Для збереження потрібен запущений API та NEXT_PUBLIC_OMNILIST_API_URL.",
+    couldNotSaveProduct: "Не вдалося зберегти товар.",
+    reviewErrors: "Будь ласка, перевірте підсвічені поля.",
+    validBasePrice: "Вкажіть коректне невід'ємне число.",
+    validQuantity: "Вкажіть коректне невід'ємне ціле число.",
+    title: "Назва",
+    brand: "Бренд",
+    description: "Опис",
+    sku: "SKU",
+    basePrice: "Базова ціна",
+    quantity: "Кількість",
+    categoryId: "ID категорії",
+    categoryLabel: "Назва категорії",
+    categorySuggestions: "Рекомендовані категорії",
+    categorySuggestionsHint: "OmniList може підказати внутрішні категорії на основі назви, опису та атрибутів товару.",
+    noCategorySuggestions: "Поки немає підказок по категоріях. Додайте точнішу назву або детальніший опис.",
+    useSuggestion: "Використати підказку",
+    mappedCategoryPreview: "Попередній перегляд категорій каналів",
+    channelOverrides: "Перевизначення по каналах",
+    channelOverridesHint: "Перевизначайте title, description або price лише тоді, коли конкретному маркетплейсу потрібна своя версія лістингу.",
+    overrideTitle: "Перевизначити title",
+    overrideDescription: "Перевизначити description",
+    overridePrice: "Перевизначити ціну",
+    overrideSectionFor: (channelName: string) => `Перевизначення для ${channelName}`,
+    invalidOverridePrice: "Ціна перевизначення має бути коректним невід'ємним числом.",
+    productPhotos: "Фото товару",
+    productPhotosHint: "Завантажуйте фото з пристрою. Перше зображення вважається основним.",
+    uploadedImages: "Завантажені зображення",
+    noImagesUploaded: "Зображення ще не завантажені.",
+    variants: "Варіанти",
+    variantsHint: "Додавайте розміри, кольори та інші комбінації з власними SKU, залишком і ціною.",
+    noVariantsConfigured: "Варіанти ще не додані.",
+    addVariant: "Додати варіант",
+    removeVariant: "Видалити варіант",
+    variantN: (index: number) => `Варіант ${index}`,
+    variantSku: "SKU варіанту",
+    variantPrice: "Ціна варіанту",
+    variantQuantity: "Кількість варіанту",
+    optionName: "Назва опції",
+    optionValue: "Значення опції",
+    secondOptionName: "Назва другої опції",
+    secondOptionValue: "Значення другої опції",
+    variantSkuRequired: "SKU варіанту є обов'язковим.",
+    variantPriceInvalid: "Ціна варіанту має бути коректним невід'ємним числом.",
+    variantQuantityInvalid: "Кількість варіанту має бути коректним невід'ємним цілим числом.",
+    variantOptionPairInvalid: "Заповніть і назву, і значення опції або залиште обидва поля порожніми.",
+    mainImage: "Основне зображення",
+    imageN: (index: number) => `Зображення ${index}`,
+    remove: "Видалити",
+    material: "Матеріал",
+    color: "Колір",
+    primaryColor: "Основний колір",
+    productImageAlt: (title: string, index: number) => `${title || "Товар"} зображення ${index}`,
+    createProduct: "Створити товар"
+  },
+  productWorkspace: {
+    description:
+      "Цей workspace поєднує validation-first редагування та асинхронний publish center, щоб продавець міг перевірити готовність, запустити публікацію та побачити результат по кожному каналу.",
+    readinessScore: "Оцінка готовності",
+    listingReady: "Це оголошення готове для цього каналу.",
+    publishingDescription: "Асинхронні задачі дозволяють публікувати зараз і перевіряти результати по каналах після виконання.",
+    noProductJobs: "Для цього товару ще немає задач публікації.",
+    canonicalDescription: "Базова сутність, яку майбутні адаптери каналів перетворюватимуть на зовнішні лістинги.",
+    coreFields: "Основні поля",
+    basePrice: "Базова ціна",
+    stock: "Залишок",
+    category: "Категорія",
+    notMappedYet: "Ще не замаплено",
+    attributes: "Атрибути",
+    noAttributes: "Збагачені атрибути ще не додані.",
+    variants: "Варіанти",
+    noVariants: "Варіанти не налаштовані.",
+    units: "од."
+  },
+  publishCard: {
+    title: "Центр публікації",
+    connected: (count: number) => `Підключено: ${count}`,
+    description: "Поставте задачу публікації в чергу, і OmniList окремо оцінить кожний вибраний канал.",
+    missingApi: "Запустіть API перед стартом задач публікації.",
+    selectChannel: "Виберіть хоча б один підключений канал.",
+    enqueueFailed: "Не вдалося поставити задачу публікації в чергу.",
+    publishToSelected: "Опублікувати у вибрані канали"
+  },
+  billingPage: {
+    eyebrow: "Монетизація",
+    title: "Оберіть план, який відповідає вашому обсягу продажів.",
+    description: "Free підходить для старту та перевірки. Pro відкриває необмежену кількість товарів і майбутній AI-tooling для серйозних мультиканальних продавців.",
+    currentUsage: "Поточне використання",
+    productUsage: (count: number, limit: number | null) => (limit === null ? `Використано товарів: ${count}` : `Використано ${count} з ${limit} товарів`),
+    aiIncluded: "AI включено",
+    aiNotIncluded: "AI не включено",
+    activePlan: "Активний план",
+    switchToFree: "Перейти на Free",
+    switchToPro: "Активувати Pro",
+    processing: "Оновлення плану...",
+    updated: "План успішно оновлено."
+  }
+} as const;

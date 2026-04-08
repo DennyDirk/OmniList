@@ -1,0 +1,12 @@
+node_modules
+.next
+dist
+.turbo
+.env
+.env.local
+coverage
+*.log
+.idea/
+*.tsbuildinfo
+packages/shared/src/**/*.js
+packages/shared/src/**/*.d.ts
