@@ -13,6 +13,8 @@
     "db:migrate": "npm run db:migrate --workspace @omnilist/api",
     "db:up": "docker compose up -d postgres",
     "db:down": "docker compose down",
+    "build:web": "npm run build --workspace @omnilist/shared && npm run build --workspace @omnilist/web",
+    "build:api": "npm run build --workspace @omnilist/shared && npm run build --workspace @omnilist/api",
     "typecheck": "npm run typecheck --workspaces",
     "build": "npm run build --workspaces"
   }
