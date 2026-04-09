@@ -33,6 +33,17 @@ export interface EbaySellerSetupOptions {
   returnPolicies: EbaySetupOption[];
 }
 
+export function hasRequiredEbayScopes(credentials: Record<string, string>, requiredScopes: string[]) {
+  const grantedScopes = new Set(
+    (credentials.scope ?? "")
+      .split(/\s+/)
+      .map((scope) => scope.trim())
+      .filter(Boolean)
+  );
+
+  return requiredScopes.every((scope) => grantedScopes.has(scope));
+}
+
 function ensureEbayEnv(env: ApiEnv) {
   if (!env.ebayClientId || !env.ebayClientSecret || !env.ebayRedirectUriName) {
     throw new Error("EBAY_ENV_NOT_CONFIGURED");
@@ -247,6 +258,15 @@ export async function getEbaySellerSetupOptions(
   credentials: Record<string, string>,
   marketplaceId: string
 ) {
+  const requiredScopes = [
+    "https://api.ebay.com/oauth/api_scope/sell.inventory",
+    "https://api.ebay.com/oauth/api_scope/sell.account.readonly"
+  ];
+
+  if (!hasRequiredEbayScopes(credentials, requiredScopes)) {
+    throw new Error("EBAY_SETUP_RECONNECT_REQUIRED");
+  }
+
   const auth = await ensureValidEbayAccessToken(env, credentials);
 
   const [locationsResponse, fulfillmentPoliciesResponse, paymentPoliciesResponse, returnPoliciesResponse] = await Promise.all([
@@ -306,6 +326,14 @@ export async function getEbaySellerSetupOptions(
     returnPoliciesResponse.data?.errors?.[0]?.message;
 
   if (!locationsResponse.ok || !fulfillmentPoliciesResponse.ok || !paymentPoliciesResponse.ok || !returnPoliciesResponse.ok) {
+    const authErrorStatus = [locationsResponse.status, fulfillmentPoliciesResponse.status, paymentPoliciesResponse.status, returnPoliciesResponse.status].find(
+      (status) => status === 401 || status === 403
+    );
+
+    if (authErrorStatus) {
+      throw new Error("EBAY_SETUP_RECONNECT_REQUIRED");
+    }
+
     throw new Error(firstError || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
   }
 

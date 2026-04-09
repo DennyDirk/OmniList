@@ -493,7 +493,9 @@ export async function buildApp() {
       const message = error instanceof Error ? error.message : "Could not import eBay seller setup.";
       return reply.code(502).send({
         message:
-          message === "EBAY_SETUP_OPTIONS_FETCH_FAILED"
+          message === "EBAY_SETUP_RECONNECT_REQUIRED"
+            ? "Reconnect eBay to grant OmniList permission to read seller setup and business policies."
+            : message === "EBAY_SETUP_OPTIONS_FETCH_FAILED"
             ? "Could not import eBay seller setup. Reconnect the channel and confirm business policies exist in eBay Sandbox."
             : message
       });
