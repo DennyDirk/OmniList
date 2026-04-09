@@ -35,7 +35,7 @@ export function getEnv(): ApiEnv {
     ebayClientSecret: process.env.EBAY_CLIENT_SECRET,
     ebayRedirectUriName: process.env.EBAY_REDIRECT_URI_NAME,
     ebayEnvironment: process.env.EBAY_ENVIRONMENT === "production" ? "production" : "sandbox",
-    ebayScopes: (process.env.EBAY_SCOPES ?? "https://api.ebay.com/oauth/api_scope/sell.inventory,https://api.ebay.com/oauth/api_scope/commerce.identity.readonly")
+    ebayScopes: (process.env.EBAY_SCOPES ?? "https://api.ebay.com/oauth/api_scope/sell.inventory")
       .split(",")
       .map((scope) => scope.trim())
       .filter(Boolean),
