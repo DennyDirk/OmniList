@@ -131,7 +131,7 @@ export async function getChannelDraftPreview(productId: string, channelId: strin
 }
 
 export function getClientApiBaseUrl() {
-  return process.env.NEXT_PUBLIC_OMNILIST_API_URL ?? process.env.OMNILIST_API_URL ?? "http://localhost:4000";
+  return "/api/proxy";
 }
 
 export async function updateWorkspacePlan(apiBaseUrl: string, subscriptionPlan: WorkspacePlan) {
