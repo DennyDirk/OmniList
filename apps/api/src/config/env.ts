@@ -20,6 +20,15 @@ export interface ApiEnv {
 
 export function getEnv(): ApiEnv {
   const port = Number(process.env.PORT ?? 4000);
+  const defaultEbayScopes = [
+    "https://api.ebay.com/oauth/api_scope/sell.inventory",
+    "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
+    "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly"
+  ];
+  const configuredEbayScopes = (process.env.EBAY_SCOPES ?? "")
+    .split(",")
+    .map((scope) => scope.trim())
+    .filter(Boolean);
 
   return {
     databaseUrl: process.env.DATABASE_URL,
@@ -35,17 +44,7 @@ export function getEnv(): ApiEnv {
     ebayClientSecret: process.env.EBAY_CLIENT_SECRET,
     ebayRedirectUriName: process.env.EBAY_REDIRECT_URI_NAME,
     ebayEnvironment: process.env.EBAY_ENVIRONMENT === "production" ? "production" : "sandbox",
-    ebayScopes: (
-      process.env.EBAY_SCOPES ??
-      [
-        "https://api.ebay.com/oauth/api_scope/sell.inventory",
-        "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
-        "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly"
-      ].join(",")
-    )
-      .split(",")
-      .map((scope) => scope.trim())
-      .filter(Boolean),
+    ebayScopes: [...new Set([...defaultEbayScopes, ...configuredEbayScopes])],
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
     supabaseStorageBucket: process.env.SUPABASE_STORAGE_BUCKET ?? "product-images"
