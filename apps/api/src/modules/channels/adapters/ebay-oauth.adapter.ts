@@ -36,8 +36,7 @@ export function createEbayOAuthAdapter(env: ApiEnv): ChannelOAuthAdapter | undef
         redirect_uri: redirectUriName,
         response_type: "code",
         scope: env.ebayScopes.join(" "),
-        state,
-        prompt: "login"
+        state
       });
 
       return `${baseUrls.authBaseUrl}/oauth2/authorize?${params.toString()}`;
