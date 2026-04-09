@@ -33,6 +33,18 @@ export interface EbaySellerSetupOptions {
   returnPolicies: EbaySetupOption[];
 }
 
+function parseJsonSafely<TResponse>(text: string) {
+  if (!text) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(text) as TResponse;
+  } catch {
+    return undefined;
+  }
+}
+
 export function hasRequiredEbayScopes(credentials: Record<string, string>, requiredScopes: string[]) {
   const grantedScopes = new Set(
     (credentials.scope ?? "")
@@ -202,12 +214,13 @@ export async function callEbayInventoryApi<TResponse>(
   });
 
   const text = await response.text();
-  const data = text ? (JSON.parse(text) as TResponse) : undefined;
+  const data = parseJsonSafely<TResponse>(text);
 
   return {
     ok: response.ok,
     status: response.status,
-    data
+    data,
+    rawText: text
   };
 }
 
@@ -231,12 +244,13 @@ export async function callEbayAccountApi<TResponse>(
   });
 
   const text = await response.text();
-  const data = text ? (JSON.parse(text) as TResponse) : undefined;
+  const data = parseJsonSafely<TResponse>(text);
 
   return {
     ok: response.ok,
     status: response.status,
-    data
+    data,
+    rawText: text
   };
 }
 
@@ -323,7 +337,11 @@ export async function getEbaySellerSetupOptions(
     locationsResponse.data?.errors?.[0]?.message ||
     fulfillmentPoliciesResponse.data?.errors?.[0]?.message ||
     paymentPoliciesResponse.data?.errors?.[0]?.message ||
-    returnPoliciesResponse.data?.errors?.[0]?.message;
+    returnPoliciesResponse.data?.errors?.[0]?.message ||
+    locationsResponse.rawText ||
+    fulfillmentPoliciesResponse.rawText ||
+    paymentPoliciesResponse.rawText ||
+    returnPoliciesResponse.rawText;
 
   if (!locationsResponse.ok || !fulfillmentPoliciesResponse.ok || !paymentPoliciesResponse.ok || !returnPoliciesResponse.ok) {
     const authErrorStatus = [locationsResponse.status, fulfillmentPoliciesResponse.status, paymentPoliciesResponse.status, returnPoliciesResponse.status].find(
