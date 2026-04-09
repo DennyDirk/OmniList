@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { ChannelConnectionManager } from "../../components/channel-connection-manager";
+import { FlashOnMount } from "../../components/flash-on-mount";
 import { requireAuthSession } from "../../lib/auth";
 import { getChannelCapabilities, getChannelConnections, getChannels, getClientApiBaseUrl, getWorkspace } from "../../lib/api";
 import { getI18n } from "../../lib/i18n.server";
@@ -93,7 +94,9 @@ export default async function ChannelsPage({
         <p>{dictionary.channelsPage.manageConnectionsDescription}</p>
       </div>
 
-      {actionBanner ? <div className={`banner ${actionBanner.kind}`}>{actionBanner.message}</div> : null}
+      {actionBanner ? (
+        <FlashOnMount clearQueryKeys={["connected", "disconnected", "error"]} message={actionBanner.message} tone={actionBanner.kind} />
+      ) : null}
 
       <ChannelConnectionManager
         apiBaseUrl={getClientApiBaseUrl()}

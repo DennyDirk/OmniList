@@ -5,6 +5,7 @@ import { useState, useTransition, type ChangeEvent, type FormEvent } from "react
 import { channels, getMappedCategoryLabel, productUpsertInputSchema, suggestCategoriesFromText, type ChannelId, type Product, type ProductAsset } from "@omnilist/shared";
 
 import { dictionaries, type Locale } from "../lib/i18n";
+import { useFlash } from "./flash-provider";
 
 interface ProductEditorProps {
   apiBaseUrl: string;
@@ -151,11 +152,11 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const dictionary = dictionaries[locale];
+  const { showFlash } = useFlash();
   const [form, setForm] = useState<FormState>(() => buildInitialState(initialProduct));
   const [images, setImages] = useState<ProductAsset[]>(() => initialProduct?.images ?? []);
   const [variants, setVariants] = useState<VariantDraft[]>(() => buildInitialVariants(initialProduct));
   const [channelOverrides, setChannelOverrides] = useState<Record<ChannelId, ChannelOverrideDraft>>(() => buildInitialOverrides(initialProduct));
-  const [error, setError] = useState("");
   const [fieldErrors, setFieldErrors] = useState<FormFieldErrors>({});
   const [variantErrors, setVariantErrors] = useState<VariantFieldErrors[]>([]);
   const [channelOverrideErrors, setChannelOverrideErrors] = useState<ChannelOverrideErrors>({});
@@ -185,19 +186,24 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
       }));
       event.target.value = "";
     } catch {
-      setError(dictionary.productEditor.couldNotReadFile);
+      showFlash({
+        tone: "error",
+        message: dictionary.productEditor.couldNotReadFile
+      });
     }
   }
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError("");
     setFieldErrors({});
     setVariantErrors([]);
     setChannelOverrideErrors({});
 
     if (!apiBaseUrl) {
-      setError(dictionary.productEditor.missingApi);
+      showFlash({
+        tone: "error",
+        message: dictionary.productEditor.missingApi
+      });
       return;
     }
 
@@ -205,7 +211,10 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
     const quantity = parseIntegerInput(form.quantity);
 
     if (!Number.isFinite(basePrice) || basePrice < 0) {
-      setError(dictionary.productEditor.reviewErrors);
+      showFlash({
+        tone: "error",
+        message: dictionary.productEditor.reviewErrors
+      });
       setFieldErrors({
         basePrice: [dictionary.productEditor.validBasePrice]
       });
@@ -213,7 +222,10 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
     }
 
     if (!Number.isInteger(quantity) || quantity < 0) {
-      setError(dictionary.productEditor.reviewErrors);
+      showFlash({
+        tone: "error",
+        message: dictionary.productEditor.reviewErrors
+      });
       setFieldErrors({
         quantity: [dictionary.productEditor.validQuantity]
       });
@@ -293,7 +305,10 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
     }, {});
 
     if (Object.keys(nextChannelOverrideErrors).length > 0) {
-      setError(dictionary.productEditor.reviewErrors);
+      showFlash({
+        tone: "error",
+        message: dictionary.productEditor.reviewErrors
+      });
       setChannelOverrideErrors(nextChannelOverrideErrors);
       return;
     }
@@ -334,7 +349,10 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
     });
 
     if (nextVariantErrors.some((entry) => Object.keys(entry).length > 0)) {
-      setError(dictionary.productEditor.reviewErrors);
+      showFlash({
+        tone: "error",
+        message: dictionary.productEditor.reviewErrors
+      });
       setVariantErrors(nextVariantErrors);
       return;
     }
@@ -342,7 +360,10 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
     const validation = productUpsertInputSchema.safeParse(payload);
 
     if (!validation.success) {
-      setError(dictionary.productEditor.reviewErrors);
+      showFlash({
+        tone: "error",
+        message: dictionary.productEditor.reviewErrors
+      });
       setFieldErrors(validation.error.flatten().fieldErrors as FormFieldErrors);
       return;
     }
@@ -373,7 +394,10 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
         setFieldErrors(body.issues.fieldErrors as FormFieldErrors);
       }
 
-      setError(body?.message ?? dictionary.productEditor.couldNotSaveProduct);
+      showFlash({
+        tone: "error",
+        message: body?.message ?? dictionary.productEditor.couldNotSaveProduct
+      });
       return;
     }
 
@@ -750,8 +774,6 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
           )}
         </div>
       </div>
-
-      {error ? <div className="banner error">{error}</div> : null}
 
       <div className="editor-actions">
         <button className="button-primary" disabled={isPending} type="submit">

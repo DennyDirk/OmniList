@@ -5,6 +5,7 @@ import { useMemo, useState, useTransition } from "react";
 import type { Product, ProductInventorySnapshot } from "@omnilist/shared";
 
 import { formatDateTime, type Locale } from "../lib/i18n";
+import { useFlash } from "./flash-provider";
 
 interface InventoryCardProps {
   apiBaseUrl: string;
@@ -15,12 +16,11 @@ interface InventoryCardProps {
 
 export function InventoryCard({ apiBaseUrl, locale, product, snapshot }: InventoryCardProps) {
   const router = useRouter();
+  const { showFlash } = useFlash();
   const [isPending, startTransition] = useTransition();
   const [delta, setDelta] = useState("1");
   const [reason, setReason] = useState("");
   const [variantId, setVariantId] = useState(product.variants[0]?.id ?? "");
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
 
   const selectedVariant = useMemo(
     () => product.variants.find((item) => item.id === variantId),
@@ -28,13 +28,13 @@ export function InventoryCard({ apiBaseUrl, locale, product, snapshot }: Invento
   );
 
   async function handleAdjust(sign: 1 | -1) {
-    setError("");
-    setSuccess("");
-
     const parsedDelta = Number(delta.trim());
 
     if (!Number.isInteger(parsedDelta) || parsedDelta <= 0) {
-      setError("Enter a positive whole number.");
+      showFlash({
+        tone: "error",
+        message: "Enter a positive whole number."
+      });
       return;
     }
 
@@ -54,11 +54,17 @@ export function InventoryCard({ apiBaseUrl, locale, product, snapshot }: Invento
 
     if (!response.ok) {
       const body = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
-      setError(body?.message ?? "Could not adjust inventory.");
+      showFlash({
+        tone: "error",
+        message: body?.message ?? "Could not adjust inventory."
+      });
       return;
     }
 
-    setSuccess(sign > 0 ? "Inventory increased." : "Inventory decreased.");
+    showFlash({
+      tone: "success",
+      message: sign > 0 ? "Inventory increased." : "Inventory decreased."
+    });
     startTransition(() => {
       router.refresh();
     });
@@ -113,9 +119,6 @@ export function InventoryCard({ apiBaseUrl, locale, product, snapshot }: Invento
           </div>
         ) : null}
       </div>
-
-      {error ? <div className="banner error">{error}</div> : null}
-      {success ? <div className="banner success">{success}</div> : null}
 
       <div className="bulk-section">
         <strong>Recent stock movements</strong>

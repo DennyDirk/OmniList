@@ -1,9 +1,10 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition, type FormEvent } from "react";
+import { useEffect, useMemo, useState, useTransition, type FormEvent } from "react";
 
 import { dictionaries, type Locale } from "../lib/i18n";
+import { useFlash } from "./flash-provider";
 
 interface AuthFormProps {
   apiBaseUrl: string;
@@ -14,9 +15,12 @@ interface AuthFormProps {
 export function AuthForm({ apiBaseUrl, mode, locale }: AuthFormProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState("");
+  const { showFlash } = useFlash();
   const dictionary = dictionaries[locale];
-  const search = typeof window !== "undefined" ? new URLSearchParams(window.location.search) : undefined;
+  const searchError = useMemo(
+    () => (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("error") : null),
+    []
+  );
   const [form, setForm] = useState({
     name: "",
     workspaceName: "",
@@ -24,12 +28,30 @@ export function AuthForm({ apiBaseUrl, mode, locale }: AuthFormProps) {
     password: ""
   });
 
+  useEffect(() => {
+    if (!searchError) {
+      return;
+    }
+
+    showFlash({
+      tone: "error",
+      message: `${dictionary.authForm.oauthFailed}: ${searchError}`
+    });
+
+    const nextSearchParams = new URLSearchParams(window.location.search);
+    nextSearchParams.delete("error");
+    const nextUrl = nextSearchParams.size > 0 ? `${window.location.pathname}?${nextSearchParams.toString()}` : window.location.pathname;
+    window.history.replaceState(null, "", nextUrl);
+  }, [dictionary.authForm.oauthFailed, searchError, showFlash]);
+
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setError("");
 
     if (!apiBaseUrl) {
-      setError(dictionary.authForm.missingApi);
+      showFlash({
+        tone: "error",
+        message: dictionary.authForm.missingApi
+      });
       return;
     }
 
@@ -58,7 +80,10 @@ export function AuthForm({ apiBaseUrl, mode, locale }: AuthFormProps) {
 
     if (!response.ok) {
       const body = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
-      setError(body?.message ?? dictionary.authForm.authFailed);
+      showFlash({
+        tone: "error",
+        message: body?.message ?? dictionary.authForm.authFailed
+      });
       return;
     }
 
@@ -70,11 +95,6 @@ export function AuthForm({ apiBaseUrl, mode, locale }: AuthFormProps) {
 
   return (
     <form className="editor-form auth-card" onSubmit={handleSubmit}>
-      {search?.get("error") ? (
-        <div className="banner error">
-          {dictionary.authForm.oauthFailed}: {search.get("error")}
-        </div>
-      ) : null}
       {mode === "register" ? (
         <>
           <label className="field">
@@ -110,8 +130,6 @@ export function AuthForm({ apiBaseUrl, mode, locale }: AuthFormProps) {
           required
         />
       </label>
-
-      {error ? <div className="banner error">{error}</div> : null}
 
       <div className="editor-actions">
         <button className="button-primary" disabled={isPending} type="submit">

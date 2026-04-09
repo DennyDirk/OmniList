@@ -473,6 +473,105 @@ a {
   color: var(--success);
 }
 
+.flash-stack {
+  position: fixed;
+  top: 96px;
+  right: 20px;
+  z-index: 90;
+  display: grid;
+  gap: 12px;
+  width: min(360px, calc(100vw - 28px));
+  pointer-events: none;
+}
+
+.flash-toast {
+  pointer-events: auto;
+  position: relative;
+  overflow: hidden;
+  padding: 14px 16px 15px;
+  border-radius: 18px;
+  border: 1px solid rgba(92, 65, 45, 0.12);
+  background:
+    linear-gradient(180deg, rgba(255, 250, 242, 0.98) 0%, rgba(252, 244, 232, 0.92) 100%),
+    rgba(255, 250, 242, 0.92);
+  box-shadow: 0 22px 60px rgba(74, 44, 27, 0.18);
+  color: var(--ink);
+  cursor: pointer;
+  backdrop-filter: blur(18px);
+  transform-origin: top right;
+  animation: flash-enter 220ms ease-out;
+}
+
+.flash-toast::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 5px;
+  border-radius: 18px 0 0 18px;
+  background: rgba(92, 65, 45, 0.3);
+}
+
+.flash-toast.success::before {
+  background: var(--success);
+}
+
+.flash-toast.error::before {
+  background: var(--danger);
+}
+
+.flash-toast.info::before {
+  background: var(--warning);
+}
+
+.flash-toast.success {
+  border-color: rgba(31, 138, 84, 0.18);
+}
+
+.flash-toast.error {
+  border-color: rgba(180, 58, 50, 0.18);
+}
+
+.flash-toast.info {
+  border-color: rgba(190, 106, 21, 0.18);
+}
+
+.flash-toast.leaving {
+  animation: flash-leave 220ms ease-in forwards;
+}
+
+.flash-toast-title {
+  margin-bottom: 4px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+@keyframes flash-enter {
+  from {
+    opacity: 0;
+    transform: translateY(-10px) scale(0.97);
+  }
+
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes flash-leave {
+  from {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+
+  to {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.96);
+  }
+}
+
 .connection-grid {
   display: grid;
   gap: 14px;
@@ -520,6 +619,13 @@ a {
 @media (max-width: 640px) {
   .shell {
     padding: 24px 14px 48px;
+  }
+
+  .flash-stack {
+    top: 82px;
+    right: 14px;
+    left: 14px;
+    width: auto;
   }
 
   .hero {

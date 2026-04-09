@@ -273,6 +273,7 @@ export const en = {
     missingApi: "Run the API before starting publish jobs.",
     selectChannel: "Select at least one connected channel.",
     enqueueFailed: "Could not enqueue publish job.",
+    enqueueSuccess: "Publish job queued successfully.",
     publishToSelected: "Publish to selected channels"
   },
   billingPage: {

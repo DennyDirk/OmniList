@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import { workspacePlans, type WorkspacePlan, type WorkspaceUsage } from "@omnilist/shared";
 
 import { dictionaries, type Locale } from "../lib/i18n";
+import { useFlash } from "./flash-provider";
 
 interface BillingPlanCardProps {
   apiBaseUrl: string;
@@ -16,8 +17,7 @@ interface BillingPlanCardProps {
 export function BillingPlanCard({ apiBaseUrl, currentPlan, locale, usage }: BillingPlanCardProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
+  const { showFlash } = useFlash();
   const dictionary = dictionaries[locale];
 
   function getPlanLabel(planId: WorkspacePlan) {
@@ -25,9 +25,6 @@ export function BillingPlanCard({ apiBaseUrl, currentPlan, locale, usage }: Bill
   }
 
   async function handlePlanChange(subscriptionPlan: WorkspacePlan) {
-    setError("");
-    setSuccess("");
-
     const response = await fetch(`${apiBaseUrl}/workspace/plan`, {
       method: "POST",
       credentials: "include",
@@ -41,11 +38,17 @@ export function BillingPlanCard({ apiBaseUrl, currentPlan, locale, usage }: Bill
 
     if (!response.ok) {
       const body = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
-      setError(body?.message ?? "Could not update workspace plan.");
+      showFlash({
+        tone: "error",
+        message: body?.message ?? "Could not update workspace plan."
+      });
       return;
     }
 
-    setSuccess(dictionary.billingPage.updated);
+    showFlash({
+      tone: "success",
+      message: dictionary.billingPage.updated
+    });
     startTransition(() => {
       router.refresh();
     });
@@ -88,8 +91,6 @@ export function BillingPlanCard({ apiBaseUrl, currentPlan, locale, usage }: Bill
           </article>
         );
       })}
-      {error ? <div className="banner error field-full">{error}</div> : null}
-      {success ? <div className="banner success field-full">{success}</div> : null}
     </div>
   );
 }

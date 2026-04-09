@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 
+import { FlashProvider } from "../components/flash-provider";
 import { LocaleSwitcher } from "../components/locale-switcher";
 import { getI18n } from "../lib/i18n.server";
 import "./globals.css";
@@ -19,13 +20,15 @@ export default async function RootLayout({
   return (
     <html lang={locale}>
       <body>
-        <div className="app-toolbar">
-          <div className="app-toolbar-inner">
-            <span className="app-wordmark">{dictionary.common.appName}</span>
-            <LocaleSwitcher currentLocale={locale} label={dictionary.layout.language} localeNames={dictionary.layout.localeNames} />
+        <FlashProvider>
+          <div className="app-toolbar">
+            <div className="app-toolbar-inner">
+              <span className="app-wordmark">{dictionary.common.appName}</span>
+              <LocaleSwitcher currentLocale={locale} label={dictionary.layout.language} localeNames={dictionary.layout.localeNames} />
+            </div>
           </div>
-        </div>
-        {children}
+          {children}
+        </FlashProvider>
       </body>
     </html>
   );

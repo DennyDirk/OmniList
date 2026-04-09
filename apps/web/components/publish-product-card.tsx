@@ -5,6 +5,7 @@ import { useState, useTransition } from "react";
 import type { ChannelConnection, ChannelId } from "@omnilist/shared";
 
 import { dictionaries, formatConnectionStatus, type Locale } from "../lib/i18n";
+import { useFlash } from "./flash-provider";
 
 interface PublishProductCardProps {
   apiBaseUrl: string;
@@ -16,19 +17,20 @@ interface PublishProductCardProps {
 export function PublishProductCard({ apiBaseUrl, productId, connections, locale }: PublishProductCardProps) {
   const router = useRouter();
   const dictionary = dictionaries[locale];
+  const { showFlash } = useFlash();
   const [selected, setSelected] = useState<Record<string, boolean>>(
     Object.fromEntries(connections.map((connection) => [connection.channelId, connection.status === "connected"]))
   );
-  const [error, setError] = useState("");
   const [isPending, startTransition] = useTransition();
 
   const connectedChannels = connections.filter((connection) => connection.status === "connected");
 
   async function handlePublish() {
-    setError("");
-
     if (!apiBaseUrl) {
-      setError(dictionary.publishCard.missingApi);
+      showFlash({
+        tone: "error",
+        message: dictionary.publishCard.missingApi
+      });
       return;
     }
 
@@ -37,7 +39,10 @@ export function PublishProductCard({ apiBaseUrl, productId, connections, locale 
       .map((connection) => connection.channelId) as ChannelId[];
 
     if (channelIds.length === 0) {
-      setError(dictionary.publishCard.selectChannel);
+      showFlash({
+        tone: "error",
+        message: dictionary.publishCard.selectChannel
+      });
       return;
     }
 
@@ -54,9 +59,17 @@ export function PublishProductCard({ apiBaseUrl, productId, connections, locale 
 
     if (!response.ok) {
       const body = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
-      setError(body?.message ?? dictionary.publishCard.enqueueFailed);
+      showFlash({
+        tone: "error",
+        message: body?.message ?? dictionary.publishCard.enqueueFailed
+      });
       return;
     }
+
+    showFlash({
+      tone: "success",
+      message: dictionary.publishCard.enqueueSuccess
+    });
 
     startTransition(() => {
       router.refresh();
@@ -95,8 +108,6 @@ export function PublishProductCard({ apiBaseUrl, productId, connections, locale 
           </label>
         ))}
       </div>
-
-      {error ? <div className="banner error">{error}</div> : null}
 
       <div className="editor-actions">
         <button className="button-primary" disabled={isPending} onClick={handlePublish} type="button">

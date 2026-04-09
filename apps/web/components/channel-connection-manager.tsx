@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState, useTransition, type ChangeEvent } from "r
 import type { Channel, ChannelConnection, ChannelConnectionCapability, ConnectionStatus } from "@omnilist/shared";
 
 import { dictionaries, formatConnectionStatus, type Locale } from "../lib/i18n";
+import { useFlash } from "./flash-provider";
 
 interface ChannelConnectionManagerProps {
   apiBaseUrl: string;
@@ -75,6 +76,7 @@ export function ChannelConnectionManager({
 }: ChannelConnectionManagerProps) {
   const router = useRouter();
   const dictionary = dictionaries[locale];
+  const { showFlash } = useFlash();
   const [isPending, startTransition] = useTransition();
   const [drafts, setDrafts] = useState<Record<string, ChannelConnectionDraft>>(() =>
     Object.fromEntries(
@@ -86,8 +88,6 @@ export function ChannelConnectionManager({
   );
   const [savingChannelId, setSavingChannelId] = useState<string | null>(null);
   const [oauthChannelBusyId, setOauthChannelBusyId] = useState<string | null>(null);
-  const [error, setError] = useState("");
-  const [success, setSuccess] = useState("");
 
   useEffect(() => {
     setDrafts(
@@ -147,9 +147,6 @@ export function ChannelConnectionManager({
   }
 
   async function saveConnection(channelId: Channel["id"]) {
-    setError("");
-    setSuccess("");
-
     const draft = drafts[channelId];
 
     if (!draft) {
@@ -187,11 +184,17 @@ export function ChannelConnectionManager({
 
     if (!response.ok) {
       const body = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
-      setError(body?.message ?? dictionary.channelManager.couldNotSave);
+      showFlash({
+        tone: "error",
+        message: body?.message ?? dictionary.channelManager.couldNotSave
+      });
       return;
     }
 
-    setSuccess(dictionary.channelManager.savedConnection(channels.find((item) => item.id === channelId)?.name ?? channelId));
+    showFlash({
+      tone: "success",
+      message: dictionary.channelManager.savedConnection(channels.find((item) => item.id === channelId)?.name ?? channelId)
+    });
 
     startTransition(() => {
       router.refresh();
@@ -199,15 +202,11 @@ export function ChannelConnectionManager({
   }
 
   function startOAuthConnection(channelId: Channel["id"]) {
-    setError("");
-    setSuccess("");
     setOauthChannelBusyId(channelId);
     window.location.assign(`${apiBaseUrl}/channel-connections/${channelId}/connect/start`);
   }
 
   async function disconnectOAuthChannel(channelId: Channel["id"]) {
-    setError("");
-    setSuccess("");
     setOauthChannelBusyId(channelId);
 
     const response = await fetch(`${apiBaseUrl}/channel-connections/${channelId}/disconnect`, {
@@ -219,11 +218,17 @@ export function ChannelConnectionManager({
 
     if (!response.ok) {
       const body = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
-      setError(body?.message ?? dictionary.channelManager.couldNotDisconnect);
+      showFlash({
+        tone: "error",
+        message: body?.message ?? dictionary.channelManager.couldNotDisconnect
+      });
       return;
     }
 
-    setSuccess(dictionary.channelManager.disconnectedChannel(channels.find((item) => item.id === channelId)?.name ?? channelId));
+    showFlash({
+      tone: "success",
+      message: dictionary.channelManager.disconnectedChannel(channels.find((item) => item.id === channelId)?.name ?? channelId)
+    });
 
     startTransition(() => {
       router.refresh();
@@ -232,9 +237,6 @@ export function ChannelConnectionManager({
 
   return (
     <div className="grid product-grid">
-      {error ? <div className="banner error field-full">{error}</div> : null}
-      {success ? <div className="banner success field-full">{success}</div> : null}
-
       {channelCards.map(({ channel, draft, capability }) => {
         const isSaving = isPending || savingChannelId === channel.id;
         const isOAuthBusy = oauthChannelBusyId === channel.id;
