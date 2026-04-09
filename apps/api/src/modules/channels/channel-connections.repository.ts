@@ -5,7 +5,7 @@ import {
   type ChannelConnection,
   type ChannelConnectionUpsertInput
 } from "@omnilist/shared";
-import { and, eq } from "drizzle-orm";
+import { and, desc, eq } from "drizzle-orm";
 
 import type { DbClient } from "../../db/client";
 import { channelConnectionsTable } from "../../db/schema";
@@ -125,25 +125,67 @@ function createMemoryChannelConnectionRepository(): ChannelConnectionRepository 
   };
 }
 
-async function ensureDbConnectionRow(db: DbClient, workspaceId: string, channelId: ChannelId) {
+function buildDefaultConnection(workspaceId: string, channelId: ChannelId): ChannelConnection {
+  return {
+    id: crypto.randomUUID(),
+    workspaceId,
+    channelId,
+    status: "disconnected",
+    metadata: {}
+  };
+}
+
+function dedupeRows(rows: Array<typeof channelConnectionsTable.$inferSelect>) {
+  const latestByChannelId = new Map<ChannelId, typeof channelConnectionsTable.$inferSelect>();
+
+  for (const row of rows) {
+    const channelId = row.channelId as ChannelId;
+    const existing = latestByChannelId.get(channelId);
+
+    if (!existing) {
+      latestByChannelId.set(channelId, row);
+      continue;
+    }
+
+    const existingUpdatedAt = existing.updatedAt?.getTime() ?? 0;
+    const rowUpdatedAt = row.updatedAt?.getTime() ?? 0;
+
+    if (rowUpdatedAt >= existingUpdatedAt) {
+      latestByChannelId.set(channelId, row);
+    }
+  }
+
+  return latestByChannelId;
+}
+
+async function findLatestDbConnectionRow(db: DbClient, workspaceId: string, channelId: ChannelId) {
   const rows = await db
     .select()
     .from(channelConnectionsTable)
     .where(and(eq(channelConnectionsTable.workspaceId, workspaceId), eq(channelConnectionsTable.channelId, channelId)))
+    .orderBy(desc(channelConnectionsTable.updatedAt), desc(channelConnectionsTable.createdAt))
     .limit(1);
 
-  if (rows[0]) {
-    return rows[0];
+  return rows[0];
+}
+
+async function ensureDbConnectionRow(db: DbClient, workspaceId: string, channelId: ChannelId) {
+  const existing = await findLatestDbConnectionRow(db, workspaceId, channelId);
+
+  if (existing) {
+    return existing;
   }
 
+  const defaultConnection = buildDefaultConnection(workspaceId, channelId);
   const inserted = await db
     .insert(channelConnectionsTable)
     .values({
-      id: crypto.randomUUID(),
-      workspaceId,
-      channelId,
-      status: "disconnected",
-      metadata: {},
+      id: defaultConnection.id,
+      workspaceId: defaultConnection.workspaceId,
+      channelId: defaultConnection.channelId,
+      status: defaultConnection.status,
+      externalAccountId: defaultConnection.externalAccountId,
+      metadata: defaultConnection.metadata,
       credentials: {}
     })
     .returning();
@@ -159,26 +201,12 @@ function createDbChannelConnectionRepository(db: DbClient): ChannelConnectionRep
         .from(channelConnectionsTable)
         .where(eq(channelConnectionsTable.workspaceId, workspaceId));
 
-      const items = rows.map(fromDbRow);
+      const latestByChannelId = dedupeRows(rows);
 
-      if (items.length > 0) {
-        return items;
-      }
-
-      const created = createDefaultConnections(workspaceId);
-      await db.insert(channelConnectionsTable).values(
-        created.map((connection) => ({
-          id: connection.id,
-          workspaceId: connection.workspaceId,
-          channelId: connection.channelId,
-          status: connection.status,
-          externalAccountId: connection.externalAccountId,
-          metadata: connection.metadata,
-          credentials: {}
-        }))
-      );
-
-      return created;
+      return channels.map((channel) => {
+        const row = latestByChannelId.get(channel.id);
+        return row ? fromDbRow(row) : buildDefaultConnection(workspaceId, channel.id);
+      });
     },
     async getConnection(workspaceId, channelId) {
       const row = await ensureDbConnectionRow(db, workspaceId, channelId);
