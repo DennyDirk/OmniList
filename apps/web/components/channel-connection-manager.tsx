@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState, useTransition, type ChangeEvent } from "react";
 import type { Channel, ChannelConnection, ChannelConnectionCapability, ConnectionStatus } from "@omnilist/shared";
 
 import { dictionaries, formatConnectionStatus, type Locale } from "../lib/i18n";
@@ -88,6 +88,17 @@ export function ChannelConnectionManager({
   const [oauthChannelBusyId, setOauthChannelBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
+
+  useEffect(() => {
+    setDrafts(
+      Object.fromEntries(
+        channels.map((channel) => {
+          const connection = initialConnections.find((item) => item.channelId === channel.id);
+          return [channel.id, buildDraft(channel, connection)];
+        })
+      )
+    );
+  }, [channels, initialConnections]);
 
   const channelCards = useMemo(
     () =>
