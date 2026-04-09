@@ -381,11 +381,6 @@ export async function buildApp() {
 
   app.get("/channel-connections/:channelId/connect/callback", async (request, reply) => {
     try {
-      const session = await getRequiredSession(request, reply);
-      if (!session) {
-        return;
-      }
-
       const params = request.params as { channelId: ChannelId };
       const query = request.query as { code?: string; state?: string };
 
@@ -394,7 +389,6 @@ export async function buildApp() {
       }
 
       await channelAuthService.completeConnection({
-        workspaceId: session.workspace.id,
         channelId: params.channelId,
         code: query.code,
         returnedState: query.state,

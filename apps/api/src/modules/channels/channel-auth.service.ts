@@ -1,4 +1,5 @@
 import type { ChannelConnectionCapability, ChannelId } from "@omnilist/shared";
+import { createHmac, timingSafeEqual } from "node:crypto";
 
 import type { ChannelConnectionRepository } from "./channel-connections.repository";
 import { createChannelAuthRegistry } from "./adapters/channel-auth-registry";
@@ -10,6 +11,13 @@ interface ChannelConnectState {
   workspaceId: string;
   channelId: ChannelId;
   state: string;
+}
+
+interface SignedChannelConnectState {
+  workspaceId: string;
+  channelId: ChannelId;
+  nonce: string;
+  expiresAt: number;
 }
 
 function encodeConnectState(value: ChannelConnectState) {
@@ -28,8 +36,64 @@ function decodeConnectState(value?: string): ChannelConnectState | undefined {
   }
 }
 
+function getChannelConnectSecret(env: ApiEnv) {
+  return process.env.OMNILIST_APP_SECRET ?? env.ebayClientSecret ?? "omnilist-dev-channel-connect-secret";
+}
+
+function signConnectState(secret: string, value: SignedChannelConnectState) {
+  const payload = Buffer.from(JSON.stringify(value)).toString("base64url");
+  const signature = createHmac("sha256", secret).update(payload).digest("base64url");
+  return `${payload}.${signature}`;
+}
+
+function verifyConnectState(secret: string, token?: string): SignedChannelConnectState | undefined {
+  if (!token) {
+    return undefined;
+  }
+
+  const [payload, signature] = token.split(".");
+
+  if (!payload || !signature) {
+    return undefined;
+  }
+
+  const expectedSignature = createHmac("sha256", secret).update(payload).digest("base64url");
+
+  try {
+    if (
+      !timingSafeEqual(Buffer.from(signature, "utf8"), Buffer.from(expectedSignature, "utf8"))
+    ) {
+      return undefined;
+    }
+  } catch {
+    return undefined;
+  }
+
+  try {
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8")) as SignedChannelConnectState;
+
+    if (
+      typeof parsed.workspaceId !== "string" ||
+      (parsed.channelId !== "shopify" && parsed.channelId !== "ebay" && parsed.channelId !== "etsy") ||
+      typeof parsed.nonce !== "string" ||
+      typeof parsed.expiresAt !== "number"
+    ) {
+      return undefined;
+    }
+
+    if (parsed.expiresAt <= Date.now()) {
+      return undefined;
+    }
+
+    return parsed;
+  } catch {
+    return undefined;
+  }
+}
+
 export function createChannelAuthService(repository: ChannelConnectionRepository, env: ApiEnv) {
   const registry = createChannelAuthRegistry(env);
+  const secret = getChannelConnectSecret(env);
 
   return {
     listCapabilities(): ChannelConnectionCapability[] {
@@ -42,31 +106,39 @@ export function createChannelAuthService(repository: ChannelConnectionRepository
         throw new Error("CHANNEL_CONNECTOR_NOT_CONFIGURED");
       }
 
-      const state = crypto.randomUUID();
+      const nonce = crypto.randomUUID();
+      const signedState = signConnectState(secret, {
+        workspaceId,
+        channelId,
+        nonce,
+        expiresAt: Date.now() + 10 * 60_000
+      });
 
       return {
-        authorizationUrl: adapter.beginConnection(state),
+        authorizationUrl: adapter.beginConnection(signedState),
         stateCookieValue: encodeConnectState({
           workspaceId,
           channelId,
-          state
+          state: signedState
         })
       };
     },
     async completeConnection(input: {
-      workspaceId: string;
       channelId: ChannelId;
       code: string;
       returnedState: string;
       stateCookieValue?: string;
     }) {
+      const verifiedState = verifyConnectState(secret, input.returnedState);
       const decodedState = decodeConnectState(input.stateCookieValue);
+      const workspaceId = verifiedState?.workspaceId ?? decodedState?.workspaceId;
+      const effectiveChannelId = verifiedState?.channelId ?? decodedState?.channelId;
+      const stateMatchesCookie = decodedState?.state === input.returnedState;
 
       if (
-        !decodedState ||
-        decodedState.workspaceId !== input.workspaceId ||
-        decodedState.channelId !== input.channelId ||
-        decodedState.state !== input.returnedState
+        !workspaceId ||
+        effectiveChannelId !== input.channelId ||
+        (!verifiedState && !stateMatchesCookie)
       ) {
         throw new Error("INVALID_CHANNEL_CONNECT_STATE");
       }
@@ -77,10 +149,10 @@ export function createChannelAuthService(repository: ChannelConnectionRepository
         throw new Error("CHANNEL_CONNECTOR_NOT_CONFIGURED");
       }
 
-      const existing = await repository.getConnection(input.workspaceId, input.channelId);
+      const existing = await repository.getConnection(workspaceId, input.channelId);
       const completed = await adapter.completeConnection(input.code);
 
-      const connection = await repository.upsertConnection(input.workspaceId, input.channelId, {
+      const connection = await repository.upsertConnection(workspaceId, input.channelId, {
         status: "connected",
         externalAccountId: completed.externalAccountId,
         metadata: {
@@ -89,7 +161,7 @@ export function createChannelAuthService(repository: ChannelConnectionRepository
         }
       });
 
-      await repository.setCredentials(input.workspaceId, input.channelId, completed.credentials);
+      await repository.setCredentials(workspaceId, input.channelId, completed.credentials);
       return connection;
     }
   };
