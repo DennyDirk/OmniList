@@ -46,6 +46,10 @@ function parseJsonSafely<TResponse>(text: string) {
   }
 }
 
+function looksLikeInputError(message: string) {
+  return /input error|invalid \./i.test(message);
+}
+
 export function hasRequiredEbayScopes(credentials: Record<string, string>, requiredScopes: string[]) {
   const grantedScopes = new Set(
     (credentials.scope ?? "")
@@ -334,40 +338,47 @@ export async function getEbaySellerSetupOptions(
     })
   ]);
 
-  const firstError =
-    fulfillmentPoliciesResponse.data?.errors?.[0]?.message ||
-    paymentPoliciesResponse.data?.errors?.[0]?.message ||
-    returnPoliciesResponse.data?.errors?.[0]?.message ||
-    fulfillmentPoliciesResponse.rawText ||
-    paymentPoliciesResponse.rawText ||
-    returnPoliciesResponse.rawText;
+  const warnings: string[] = [];
+  const authErrorStatus = [locationsResponse.status, fulfillmentPoliciesResponse.status, paymentPoliciesResponse.status, returnPoliciesResponse.status].find(
+    (status) => status === 401 || status === 403
+  );
 
-  if (!fulfillmentPoliciesResponse.ok || !paymentPoliciesResponse.ok || !returnPoliciesResponse.ok) {
-    const authErrorStatus = [locationsResponse.status, fulfillmentPoliciesResponse.status, paymentPoliciesResponse.status, returnPoliciesResponse.status].find(
-      (status) => status === 401 || status === 403
-    );
-
-    if (authErrorStatus) {
-      throw new Error("EBAY_SETUP_RECONNECT_REQUIRED");
-    }
-
-    throw new Error(firstError || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
+  if (authErrorStatus) {
+    throw new Error("EBAY_SETUP_RECONNECT_REQUIRED");
   }
 
   const locationErrorMessage = locationsResponse.data?.errors?.[0]?.message || locationsResponse.rawText || "";
-  const canIgnoreLocationFailure = !locationsResponse.ok && /input error/i.test(locationErrorMessage);
-  const warnings: string[] = [];
+  const fulfillmentErrorMessage =
+    fulfillmentPoliciesResponse.data?.errors?.[0]?.message || fulfillmentPoliciesResponse.rawText || "";
+  const paymentErrorMessage = paymentPoliciesResponse.data?.errors?.[0]?.message || paymentPoliciesResponse.rawText || "";
+  const returnErrorMessage = returnPoliciesResponse.data?.errors?.[0]?.message || returnPoliciesResponse.rawText || "";
+  const canIgnoreLocationFailure = !locationsResponse.ok && looksLikeInputError(locationErrorMessage);
+  const canIgnoreFulfillmentFailure = !fulfillmentPoliciesResponse.ok && looksLikeInputError(fulfillmentErrorMessage);
+  const canIgnorePaymentFailure = !paymentPoliciesResponse.ok && looksLikeInputError(paymentErrorMessage);
+  const canIgnoreReturnFailure = !returnPoliciesResponse.ok && looksLikeInputError(returnErrorMessage);
 
   if (canIgnoreLocationFailure) {
     warnings.push("eBay did not return inventory locations for this sandbox account. Add merchantLocationKey manually or create an inventory location in eBay.");
   } else if (!locationsResponse.ok) {
-    const authErrorStatus = locationsResponse.status === 401 || locationsResponse.status === 403;
-
-    if (authErrorStatus) {
-      throw new Error("EBAY_SETUP_RECONNECT_REQUIRED");
-    }
-
     throw new Error(locationErrorMessage || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
+  }
+
+  if (canIgnoreFulfillmentFailure) {
+    warnings.push("eBay did not return fulfillment policies for this sandbox account. Enter fulfillmentPolicyId manually if needed.");
+  } else if (!fulfillmentPoliciesResponse.ok) {
+    throw new Error(fulfillmentErrorMessage || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
+  }
+
+  if (canIgnorePaymentFailure) {
+    warnings.push("eBay did not return payment policies for this sandbox account. Enter paymentPolicyId manually if needed.");
+  } else if (!paymentPoliciesResponse.ok) {
+    throw new Error(paymentErrorMessage || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
+  }
+
+  if (canIgnoreReturnFailure) {
+    warnings.push("eBay did not return return policies for this sandbox account. Enter returnPolicyId manually if needed.");
+  } else if (!returnPoliciesResponse.ok) {
+    throw new Error(returnErrorMessage || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
   }
 
   return {
@@ -384,19 +395,19 @@ export async function getEbaySellerSetupOptions(
             detail: addressLabel || undefined
           };
         }),
-      fulfillmentPolicies: (fulfillmentPoliciesResponse.data?.fulfillmentPolicies ?? [])
+      fulfillmentPolicies: ((canIgnoreFulfillmentFailure ? [] : fulfillmentPoliciesResponse.data?.fulfillmentPolicies) ?? [])
         .filter((policy): policy is NonNullable<typeof policy> & { fulfillmentPolicyId: string } => Boolean(policy?.fulfillmentPolicyId))
         .map((policy) => ({
           id: policy.fulfillmentPolicyId,
           ...mapPolicyLabel(policy)
         })),
-      paymentPolicies: (paymentPoliciesResponse.data?.paymentPolicies ?? [])
+      paymentPolicies: ((canIgnorePaymentFailure ? [] : paymentPoliciesResponse.data?.paymentPolicies) ?? [])
         .filter((policy): policy is NonNullable<typeof policy> & { paymentPolicyId: string } => Boolean(policy?.paymentPolicyId))
         .map((policy) => ({
           id: policy.paymentPolicyId,
           ...mapPolicyLabel(policy)
         })),
-      returnPolicies: (returnPoliciesResponse.data?.returnPolicies ?? [])
+      returnPolicies: ((canIgnoreReturnFailure ? [] : returnPoliciesResponse.data?.returnPolicies) ?? [])
         .filter((policy): policy is NonNullable<typeof policy> & { returnPolicyId: string } => Boolean(policy?.returnPolicyId))
         .map((policy) => ({
           id: policy.returnPolicyId,
