@@ -31,15 +31,17 @@ export function createEbayOAuthAdapter(env: ApiEnv): ChannelOAuthAdapter | undef
       return true;
     },
     beginConnection(state: string) {
-      const params = new URLSearchParams({
-        client_id: clientId,
-        redirect_uri: redirectUriName,
-        response_type: "code",
-        scope: env.ebayScopes.join(" "),
-        state
-      });
+      const query = [
+        ["client_id", clientId],
+        ["redirect_uri", redirectUriName],
+        ["response_type", "code"],
+        ["scope", env.ebayScopes.join(" ")],
+        ["state", state]
+      ]
+        .map(([key, value]) => `${encodeURIComponent(key)}=${encodeURIComponent(value)}`)
+        .join("&");
 
-      return `${baseUrls.authBaseUrl}/oauth2/authorize?${params.toString()}`;
+      return `${baseUrls.authBaseUrl}/oauth2/authorize?${query}`;
     },
     async completeConnection(code: string) {
       const token = await exchangeEbayAuthorizationCode(env, code);
