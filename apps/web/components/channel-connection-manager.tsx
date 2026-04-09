@@ -28,6 +28,9 @@ interface ChannelConnectionDraft {
   returnPolicyId: string;
   currency: string;
   condition: string;
+  authMode: string;
+  connectedAt: string;
+  environment: string;
 }
 
 function buildDraft(channel: Channel, connection?: ChannelConnection): ChannelConnectionDraft {
@@ -44,7 +47,10 @@ function buildDraft(channel: Channel, connection?: ChannelConnection): ChannelCo
     paymentPolicyId: connection?.metadata.paymentPolicyId ?? "",
     returnPolicyId: connection?.metadata.returnPolicyId ?? "",
     currency: connection?.metadata.currency ?? "USD",
-    condition: connection?.metadata.condition ?? "NEW"
+    condition: connection?.metadata.condition ?? "NEW",
+    authMode: connection?.metadata.authMode ?? "",
+    connectedAt: connection?.metadata.connectedAt ?? "",
+    environment: connection?.metadata.environment ?? ""
   };
 }
 
@@ -79,6 +85,7 @@ export function ChannelConnectionManager({
     )
   );
   const [savingChannelId, setSavingChannelId] = useState<string | null>(null);
+  const [oauthChannelBusyId, setOauthChannelBusyId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
 
@@ -100,6 +107,32 @@ export function ChannelConnectionManager({
         [key]: value
       }
     }));
+  }
+
+  function getEbaySetupIssues(draft: ChannelConnectionDraft) {
+    const issues: string[] = [];
+
+    if (draft.status !== "connected") {
+      issues.push(dictionary.channelManager.connectAccountFirst);
+    }
+
+    if (!draft.merchantLocationKey.trim()) {
+      issues.push(dictionary.channelManager.missingMerchantLocationKey);
+    }
+
+    if (!draft.fulfillmentPolicyId.trim()) {
+      issues.push(dictionary.channelManager.missingFulfillmentPolicyId);
+    }
+
+    if (!draft.paymentPolicyId.trim()) {
+      issues.push(dictionary.channelManager.missingPaymentPolicyId);
+    }
+
+    if (!draft.returnPolicyId.trim()) {
+      issues.push(dictionary.channelManager.missingReturnPolicyId);
+    }
+
+    return issues;
   }
 
   async function saveConnection(channelId: Channel["id"]) {
@@ -154,6 +187,38 @@ export function ChannelConnectionManager({
     });
   }
 
+  function startOAuthConnection(channelId: Channel["id"]) {
+    setError("");
+    setSuccess("");
+    setOauthChannelBusyId(channelId);
+    window.location.assign(`${apiBaseUrl}/channel-connections/${channelId}/connect/start`);
+  }
+
+  async function disconnectOAuthChannel(channelId: Channel["id"]) {
+    setError("");
+    setSuccess("");
+    setOauthChannelBusyId(channelId);
+
+    const response = await fetch(`${apiBaseUrl}/channel-connections/${channelId}/disconnect`, {
+      method: "POST",
+      credentials: "include"
+    });
+
+    setOauthChannelBusyId(null);
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
+      setError(body?.message ?? dictionary.channelManager.couldNotDisconnect);
+      return;
+    }
+
+    setSuccess(dictionary.channelManager.disconnectedChannel(channels.find((item) => item.id === channelId)?.name ?? channelId));
+
+    startTransition(() => {
+      router.refresh();
+    });
+  }
+
   return (
     <div className="grid product-grid">
       {error ? <div className="banner error field-full">{error}</div> : null}
@@ -161,9 +226,10 @@ export function ChannelConnectionManager({
 
       {channelCards.map(({ channel, draft, capability }) => {
         const isSaving = isPending || savingChannelId === channel.id;
+        const isOAuthBusy = oauthChannelBusyId === channel.id;
         const isOAuthChannel = capability?.connectionMode === "oauth";
         const canStartOAuth = Boolean(apiBaseUrl) && isOAuthChannel && capability?.enabled;
-        const connectHref = `${apiBaseUrl}/channel-connections/${channel.id}/connect/start`;
+        const ebaySetupIssues = channel.id === "ebay" ? getEbaySetupIssues(draft) : [];
 
         return (
           <article className="card" key={channel.id}>
@@ -243,25 +309,71 @@ export function ChannelConnectionManager({
                   <>
                     <div className="hero-actions" style={{ marginTop: 16 }}>
                       {canStartOAuth ? (
-                        <a className="cta secondary" href={connectHref}>
-                          {draft.status === "connected" ? "Reconnect channel" : "Connect channel"}
-                        </a>
+                        <>
+                          <button
+                            className="button-secondary"
+                            disabled={isOAuthBusy}
+                            onClick={() => startOAuthConnection(channel.id)}
+                            type="button"
+                          >
+                            {isOAuthBusy
+                              ? dictionary.channelManager.redirectingToProvider
+                              : draft.status === "connected"
+                                ? dictionary.channelManager.reconnectChannel
+                                : dictionary.channelManager.connectChannel}
+                          </button>
+                          {draft.status === "connected" ? (
+                            <button
+                              className="button-secondary"
+                              disabled={isOAuthBusy}
+                              onClick={() => void disconnectOAuthChannel(channel.id)}
+                              type="button"
+                            >
+                              {dictionary.channelManager.disconnectChannel}
+                            </button>
+                          ) : null}
+                        </>
                       ) : (
-                        <span className="muted">OAuth connector is not configured on the server yet.</span>
+                        <span className="muted">{dictionary.channelManager.oauthNotConfigured}</span>
                       )}
+                    </div>
+
+                    <div className="list" style={{ marginTop: 16 }}>
+                      <div className="list-item">
+                        <strong>{dictionary.channelManager.linkedAccount}</strong>
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          {draft.externalAccountId || dictionary.channelManager.noLinkedAccountYet}
+                        </div>
+                      </div>
+
+                      {draft.connectedAt ? (
+                        <div className="list-item">
+                          <strong>{dictionary.channelManager.connectedAt}</strong>
+                          <div className="muted" style={{ marginTop: 8 }}>
+                            {new Date(draft.connectedAt).toLocaleString()}
+                          </div>
+                        </div>
+                      ) : null}
+
+                      <div className="list-item">
+                        <strong>{dictionary.channelManager.oauthBehaviorTitle}</strong>
+                        <div className="muted" style={{ marginTop: 8 }}>
+                          {dictionary.channelManager.oauthBehaviorDescription}
+                        </div>
+                      </div>
                     </div>
 
                     {channel.id === "ebay" ? (
                       <div className="connection-grid" style={{ marginTop: 16 }}>
                         <label className="field">
-                          <span>Marketplace ID</span>
+                          <span>{dictionary.channelManager.marketplaceId}</span>
                           <input
                             value={draft.marketplaceId}
                             onChange={(event: ChangeEvent<HTMLInputElement>) => updateDraft(channel.id, "marketplaceId", event.target.value)}
                           />
                         </label>
                         <label className="field">
-                          <span>Merchant location key</span>
+                          <span>{dictionary.channelManager.merchantLocationKey}</span>
                           <input
                             value={draft.merchantLocationKey}
                             onChange={(event: ChangeEvent<HTMLInputElement>) =>
@@ -270,7 +382,7 @@ export function ChannelConnectionManager({
                           />
                         </label>
                         <label className="field">
-                          <span>Fulfillment policy ID</span>
+                          <span>{dictionary.channelManager.fulfillmentPolicyId}</span>
                           <input
                             value={draft.fulfillmentPolicyId}
                             onChange={(event: ChangeEvent<HTMLInputElement>) =>
@@ -279,7 +391,7 @@ export function ChannelConnectionManager({
                           />
                         </label>
                         <label className="field">
-                          <span>Payment policy ID</span>
+                          <span>{dictionary.channelManager.paymentPolicyId}</span>
                           <input
                             value={draft.paymentPolicyId}
                             onChange={(event: ChangeEvent<HTMLInputElement>) =>
@@ -288,7 +400,7 @@ export function ChannelConnectionManager({
                           />
                         </label>
                         <label className="field">
-                          <span>Return policy ID</span>
+                          <span>{dictionary.channelManager.returnPolicyId}</span>
                           <input
                             value={draft.returnPolicyId}
                             onChange={(event: ChangeEvent<HTMLInputElement>) =>
@@ -297,19 +409,34 @@ export function ChannelConnectionManager({
                           />
                         </label>
                         <label className="field">
-                          <span>Currency</span>
+                          <span>{dictionary.channelManager.currency}</span>
                           <input
                             value={draft.currency}
                             onChange={(event: ChangeEvent<HTMLInputElement>) => updateDraft(channel.id, "currency", event.target.value)}
                           />
                         </label>
                         <label className="field">
-                          <span>Condition</span>
+                          <span>{dictionary.channelManager.condition}</span>
                           <input
                             value={draft.condition}
                             onChange={(event: ChangeEvent<HTMLInputElement>) => updateDraft(channel.id, "condition", event.target.value)}
                           />
                         </label>
+
+                        <div className="field field-full">
+                          <span>{dictionary.channelManager.publishReadinessTitle}</span>
+                          <div className="list">
+                            {ebaySetupIssues.length === 0 ? (
+                              <div className="issue suggestion">{dictionary.channelManager.publishReadyNow}</div>
+                            ) : (
+                              ebaySetupIssues.map((issue) => (
+                                <div className="issue warning" key={issue}>
+                                  {issue}
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
                       </div>
                     ) : null}
                   </>

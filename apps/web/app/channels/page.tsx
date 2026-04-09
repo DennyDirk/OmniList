@@ -5,9 +5,48 @@ import { requireAuthSession } from "../../lib/auth";
 import { getChannelCapabilities, getChannelConnections, getChannels, getClientApiBaseUrl, getWorkspace } from "../../lib/api";
 import { getI18n } from "../../lib/i18n.server";
 
-export default async function ChannelsPage() {
+function formatChannelActionMessage(
+  dictionary: Awaited<ReturnType<typeof getI18n>>["dictionary"],
+  channels: Array<{ id: string; name: string }>,
+  searchParams?: Record<string, string | string[] | undefined>
+) {
+  const connected = typeof searchParams?.connected === "string" ? searchParams.connected : undefined;
+  const disconnected = typeof searchParams?.disconnected === "string" ? searchParams.disconnected : undefined;
+  const error = typeof searchParams?.error === "string" ? searchParams.error : undefined;
+  const channelName = (channelId?: string) => channels.find((item) => item.id === channelId)?.name ?? channelId;
+
+  if (connected) {
+    return {
+      kind: "success" as const,
+      message: dictionary.channelManager.connectedChannel(channelName(connected) ?? connected)
+    };
+  }
+
+  if (disconnected) {
+    return {
+      kind: "success" as const,
+      message: dictionary.channelManager.disconnectedChannel(channelName(disconnected) ?? disconnected)
+    };
+  }
+
+  if (error) {
+    return {
+      kind: "error" as const,
+      message: dictionary.channelManager.oauthError(error)
+    };
+  }
+
+  return undefined;
+}
+
+export default async function ChannelsPage({
+  searchParams
+}: {
+  searchParams?: Promise<Record<string, string | string[] | undefined>>;
+}) {
   const { dictionary, locale } = await getI18n();
   const session = await requireAuthSession();
+  const resolvedSearchParams = searchParams ? await searchParams : undefined;
   const [workspace, channels, connections, capabilities] = await Promise.all([
     getWorkspace(),
     getChannels(),
@@ -17,6 +56,7 @@ export default async function ChannelsPage() {
 
   const connected = connections.filter((item) => item.status === "connected").length;
   const needsAttention = connections.filter((item) => item.status === "attention_required").length;
+  const actionBanner = formatChannelActionMessage(dictionary, channels, resolvedSearchParams);
 
   return (
     <main className="shell">
@@ -52,6 +92,8 @@ export default async function ChannelsPage() {
         <h2>{dictionary.channelsPage.manageConnections}</h2>
         <p>{dictionary.channelsPage.manageConnectionsDescription}</p>
       </div>
+
+      {actionBanner ? <div className={`banner ${actionBanner.kind}`}>{actionBanner.message}</div> : null}
 
       <ChannelConnectionManager
         apiBaseUrl={getClientApiBaseUrl()}

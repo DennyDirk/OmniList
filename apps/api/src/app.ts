@@ -444,6 +444,20 @@ export async function buildApp() {
     }
   });
 
+  app.post("/channel-connections/:channelId/disconnect", async (request, reply) => {
+    const session = await getRequiredSession(request, reply);
+    if (!session) {
+      return;
+    }
+
+    const params = request.params as { channelId: ChannelId };
+    const connection = await channelConnectionsService.disconnectConnection(session.workspace.id, params.channelId);
+
+    return {
+      item: connection
+    };
+  });
+
   app.get("/products", async (request, reply) => {
     const session = await getRequiredSession(request, reply);
     if (!session) {
