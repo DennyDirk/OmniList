@@ -31,6 +31,7 @@ export interface EbaySellerSetupOptions {
   fulfillmentPolicies: EbaySetupOption[];
   paymentPolicies: EbaySetupOption[];
   returnPolicies: EbaySetupOption[];
+  warnings?: string[];
 }
 
 function parseJsonSafely<TResponse>(text: string) {
@@ -334,16 +335,14 @@ export async function getEbaySellerSetupOptions(
   ]);
 
   const firstError =
-    locationsResponse.data?.errors?.[0]?.message ||
     fulfillmentPoliciesResponse.data?.errors?.[0]?.message ||
     paymentPoliciesResponse.data?.errors?.[0]?.message ||
     returnPoliciesResponse.data?.errors?.[0]?.message ||
-    locationsResponse.rawText ||
     fulfillmentPoliciesResponse.rawText ||
     paymentPoliciesResponse.rawText ||
     returnPoliciesResponse.rawText;
 
-  if (!locationsResponse.ok || !fulfillmentPoliciesResponse.ok || !paymentPoliciesResponse.ok || !returnPoliciesResponse.ok) {
+  if (!fulfillmentPoliciesResponse.ok || !paymentPoliciesResponse.ok || !returnPoliciesResponse.ok) {
     const authErrorStatus = [locationsResponse.status, fulfillmentPoliciesResponse.status, paymentPoliciesResponse.status, returnPoliciesResponse.status].find(
       (status) => status === 401 || status === 403
     );
@@ -355,10 +354,26 @@ export async function getEbaySellerSetupOptions(
     throw new Error(firstError || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
   }
 
+  const locationErrorMessage = locationsResponse.data?.errors?.[0]?.message || locationsResponse.rawText || "";
+  const canIgnoreLocationFailure = !locationsResponse.ok && /input error/i.test(locationErrorMessage);
+  const warnings: string[] = [];
+
+  if (canIgnoreLocationFailure) {
+    warnings.push("eBay did not return inventory locations for this sandbox account. Add merchantLocationKey manually or create an inventory location in eBay.");
+  } else if (!locationsResponse.ok) {
+    const authErrorStatus = locationsResponse.status === 401 || locationsResponse.status === 403;
+
+    if (authErrorStatus) {
+      throw new Error("EBAY_SETUP_RECONNECT_REQUIRED");
+    }
+
+    throw new Error(locationErrorMessage || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
+  }
+
   return {
     options: {
       marketplaceId,
-      merchantLocations: (locationsResponse.data?.locations ?? [])
+      merchantLocations: ((canIgnoreLocationFailure ? [] : locationsResponse.data?.locations) ?? [])
         .filter((location): location is NonNullable<typeof location> & { merchantLocationKey: string } => Boolean(location?.merchantLocationKey))
         .map((location) => {
           const address = location.location?.address;
@@ -386,7 +401,8 @@ export async function getEbaySellerSetupOptions(
         .map((policy) => ({
           id: policy.returnPolicyId,
           ...mapPolicyLabel(policy)
-        }))
+        })),
+      warnings
     } satisfies EbaySellerSetupOptions,
     credentials: auth.credentials
   };

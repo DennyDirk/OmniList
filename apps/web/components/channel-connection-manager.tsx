@@ -46,6 +46,7 @@ interface EbaySetupOptions {
   fulfillmentPolicies: EbaySetupOption[];
   paymentPolicies: EbaySetupOption[];
   returnPolicies: EbaySetupOption[];
+  warnings?: string[];
 }
 
 function buildDraft(channel: Channel, connection?: ChannelConnection): ChannelConnectionDraft {
@@ -212,6 +213,13 @@ export function ChannelConnectionManager({
       tone: "success",
       message: dictionary.channelManager.loadedEbaySetup
     });
+
+    for (const warning of nextOptions.warnings ?? []) {
+      showFlash({
+        tone: "info",
+        message: warning
+      });
+    }
   }
 
   async function saveConnection(channelId: Channel["id"]) {
