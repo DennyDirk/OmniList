@@ -162,6 +162,12 @@ export const ru = {
     oauthBehaviorTitle: "Как работает подключение",
     oauthBehaviorDescription:
       "Если продавец уже вошел в eBay Sandbox, подключение может завершиться мгновенно без повторного экрана логина.",
+    importSellerSetupTitle: "Импорт seller setup",
+    importSellerSetupHint: "Загрузите merchant locations и business policies из подключенного eBay-аккаунта и выберите нужные ID прямо в OmniList.",
+    importFromEbay: "Импортировать из eBay",
+    loadingEbaySetup: "Загрузка seller setup...",
+    loadedEbaySetup: "Настройки продавца eBay успешно импортированы.",
+    couldNotLoadEbaySetup: "Не удалось загрузить seller setup из eBay.",
     marketplaceId: "Marketplace ID",
     merchantLocationKey: "Merchant location key",
     fulfillmentPolicyId: "Fulfillment policy ID",

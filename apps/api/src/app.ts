@@ -27,6 +27,7 @@ import { createChannelConnectionRepository } from "./modules/channels/channel-co
 import { createChannelConnectionsService } from "./modules/channels/channel-connections.service";
 import { CHANNEL_CONNECT_STATE_COOKIE_NAME, createChannelAuthService } from "./modules/channels/channel-auth.service";
 import { listChannels } from "./modules/channels/channels.service";
+import { getEbaySellerSetupOptions } from "./modules/channels/adapters/ebay-client";
 import { createMediaService } from "./modules/media/media.service";
 import { createInventoryRepository } from "./modules/inventory/inventory.repository";
 import { createInventoryService } from "./modules/inventory/inventory.service";
@@ -456,6 +457,47 @@ export async function buildApp() {
     return {
       item: connection
     };
+  });
+
+  app.get("/channel-connections/ebay/setup-options", async (request, reply) => {
+    const session = await getRequiredSession(request, reply);
+    if (!session) {
+      return;
+    }
+
+    const query = request.query as { marketplaceId?: string };
+    const connectionRecord = await channelConnectionRepository.getConnectionRecord(session.workspace.id, "ebay");
+
+    if (!connectionRecord || connectionRecord.connection.status !== "connected") {
+      return reply.code(400).send({
+        message: "Connect the eBay channel before importing seller setup."
+      });
+    }
+
+    if (!connectionRecord.credentials.accessToken && !connectionRecord.credentials.refreshToken) {
+      return reply.code(400).send({
+        message: "Reconnect eBay so OmniList can access seller setup details."
+      });
+    }
+
+    const marketplaceId = query.marketplaceId?.trim() || connectionRecord.connection.metadata.marketplaceId || "EBAY_US";
+
+    try {
+      const result = await getEbaySellerSetupOptions(env, connectionRecord.credentials, marketplaceId);
+      await channelConnectionRepository.setCredentials(session.workspace.id, "ebay", result.credentials);
+
+      return {
+        item: result.options
+      };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not import eBay seller setup.";
+      return reply.code(502).send({
+        message:
+          message === "EBAY_SETUP_OPTIONS_FETCH_FAILED"
+            ? "Could not import eBay seller setup. Reconnect the channel and confirm business policies exist in eBay Sandbox."
+            : message
+      });
+    }
   });
 
   app.get("/products", async (request, reply) => {

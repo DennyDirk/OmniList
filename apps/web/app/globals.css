@@ -362,6 +362,40 @@ a {
   gap: 10px;
 }
 
+.option-chips {
+  display: grid;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.option-chip {
+  display: grid;
+  gap: 2px;
+  text-align: left;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid var(--line);
+  background: rgba(255, 255, 255, 0.72);
+  color: var(--ink);
+  cursor: pointer;
+  transition: border-color 140ms ease, transform 140ms ease, background 140ms ease;
+}
+
+.option-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(176, 97, 39, 0.34);
+}
+
+.option-chip.selected {
+  border-color: rgba(176, 97, 39, 0.42);
+  background: rgba(176, 97, 39, 0.1);
+}
+
+.option-chip small {
+  color: var(--muted);
+  font-size: 0.77rem;
+}
+
 .publish-target {
   display: flex;
   align-items: center;

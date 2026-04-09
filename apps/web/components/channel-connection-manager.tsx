@@ -34,6 +34,20 @@ interface ChannelConnectionDraft {
   environment: string;
 }
 
+interface EbaySetupOption {
+  id: string;
+  label: string;
+  detail?: string;
+}
+
+interface EbaySetupOptions {
+  marketplaceId: string;
+  merchantLocations: EbaySetupOption[];
+  fulfillmentPolicies: EbaySetupOption[];
+  paymentPolicies: EbaySetupOption[];
+  returnPolicies: EbaySetupOption[];
+}
+
 function buildDraft(channel: Channel, connection?: ChannelConnection): ChannelConnectionDraft {
   return {
     id: connection?.id,
@@ -88,6 +102,8 @@ export function ChannelConnectionManager({
   );
   const [savingChannelId, setSavingChannelId] = useState<string | null>(null);
   const [oauthChannelBusyId, setOauthChannelBusyId] = useState<string | null>(null);
+  const [loadingSetupChannelId, setLoadingSetupChannelId] = useState<string | null>(null);
+  const [ebaySetupOptions, setEbaySetupOptions] = useState<EbaySetupOptions | null>(null);
 
   useEffect(() => {
     setDrafts(
@@ -144,6 +160,58 @@ export function ChannelConnectionManager({
     }
 
     return issues;
+  }
+
+  function applySetupValue(channelId: string, key: keyof ChannelConnectionDraft, value: string) {
+    updateDraft(channelId, key, value);
+  }
+
+  async function loadEbaySetupOptions() {
+    const draft = drafts.ebay;
+
+    if (!draft) {
+      return;
+    }
+
+    setLoadingSetupChannelId("ebay");
+
+    const response = await fetch(
+      `${apiBaseUrl}/channel-connections/ebay/setup-options?marketplaceId=${encodeURIComponent(draft.marketplaceId || "EBAY_US")}`,
+      {
+        credentials: "include"
+      }
+    );
+
+    setLoadingSetupChannelId(null);
+
+    if (!response.ok) {
+      const body = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
+      showFlash({
+        tone: "error",
+        message: body?.message ?? dictionary.channelManager.couldNotLoadEbaySetup
+      });
+      return;
+    }
+
+    const body = (await response.json()) as { item: EbaySetupOptions };
+    const nextOptions = body.item;
+    setEbaySetupOptions(nextOptions);
+    setDrafts((current) => ({
+      ...current,
+      ebay: {
+        ...current.ebay,
+        marketplaceId: current.ebay.marketplaceId || nextOptions.marketplaceId,
+        merchantLocationKey: current.ebay.merchantLocationKey || nextOptions.merchantLocations[0]?.id || "",
+        fulfillmentPolicyId: current.ebay.fulfillmentPolicyId || nextOptions.fulfillmentPolicies[0]?.id || "",
+        paymentPolicyId: current.ebay.paymentPolicyId || nextOptions.paymentPolicies[0]?.id || "",
+        returnPolicyId: current.ebay.returnPolicyId || nextOptions.returnPolicies[0]?.id || ""
+      }
+    }));
+
+    showFlash({
+      tone: "success",
+      message: dictionary.channelManager.loadedEbaySetup
+    });
   }
 
   async function saveConnection(channelId: Channel["id"]) {
@@ -230,6 +298,10 @@ export function ChannelConnectionManager({
       message: dictionary.channelManager.disconnectedChannel(channels.find((item) => item.id === channelId)?.name ?? channelId)
     });
 
+    if (channelId === "ebay") {
+      setEbaySetupOptions(null);
+    }
+
     startTransition(() => {
       router.refresh();
     });
@@ -240,6 +312,7 @@ export function ChannelConnectionManager({
       {channelCards.map(({ channel, draft, capability }) => {
         const isSaving = isPending || savingChannelId === channel.id;
         const isOAuthBusy = oauthChannelBusyId === channel.id;
+        const isLoadingSetup = loadingSetupChannelId === channel.id;
         const isOAuthChannel = capability?.connectionMode === "oauth";
         const canStartOAuth = Boolean(apiBaseUrl) && isOAuthChannel && capability?.enabled;
         const ebaySetupIssues = channel.id === "ebay" ? getEbaySetupIssues(draft) : [];
@@ -378,6 +451,20 @@ export function ChannelConnectionManager({
 
                     {channel.id === "ebay" ? (
                       <div className="connection-grid" style={{ marginTop: 16 }}>
+                        <div className="field field-full">
+                          <div className="row">
+                            <span>{dictionary.channelManager.importSellerSetupTitle}</span>
+                            <button
+                              className="button-secondary"
+                              disabled={draft.status !== "connected" || isLoadingSetup}
+                              onClick={() => void loadEbaySetupOptions()}
+                              type="button"
+                            >
+                              {isLoadingSetup ? dictionary.channelManager.loadingEbaySetup : dictionary.channelManager.importFromEbay}
+                            </button>
+                          </div>
+                          <span className="field-hint">{dictionary.channelManager.importSellerSetupHint}</span>
+                        </div>
                         <label className="field">
                           <span>{dictionary.channelManager.marketplaceId}</span>
                           <input
@@ -393,6 +480,21 @@ export function ChannelConnectionManager({
                               updateDraft(channel.id, "merchantLocationKey", event.target.value)
                             }
                           />
+                          {ebaySetupOptions?.merchantLocations.length ? (
+                            <div className="option-chips">
+                              {ebaySetupOptions.merchantLocations.map((option) => (
+                                <button
+                                  className={`option-chip ${draft.merchantLocationKey === option.id ? "selected" : ""}`}
+                                  key={option.id}
+                                  onClick={() => applySetupValue(channel.id, "merchantLocationKey", option.id)}
+                                  type="button"
+                                >
+                                  <span>{option.label}</span>
+                                  <small>{option.detail ?? option.id}</small>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
                         </label>
                         <label className="field">
                           <span>{dictionary.channelManager.fulfillmentPolicyId}</span>
@@ -402,6 +504,21 @@ export function ChannelConnectionManager({
                               updateDraft(channel.id, "fulfillmentPolicyId", event.target.value)
                             }
                           />
+                          {ebaySetupOptions?.fulfillmentPolicies.length ? (
+                            <div className="option-chips">
+                              {ebaySetupOptions.fulfillmentPolicies.map((option) => (
+                                <button
+                                  className={`option-chip ${draft.fulfillmentPolicyId === option.id ? "selected" : ""}`}
+                                  key={option.id}
+                                  onClick={() => applySetupValue(channel.id, "fulfillmentPolicyId", option.id)}
+                                  type="button"
+                                >
+                                  <span>{option.label}</span>
+                                  <small>{option.detail ?? option.id}</small>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
                         </label>
                         <label className="field">
                           <span>{dictionary.channelManager.paymentPolicyId}</span>
@@ -411,6 +528,21 @@ export function ChannelConnectionManager({
                               updateDraft(channel.id, "paymentPolicyId", event.target.value)
                             }
                           />
+                          {ebaySetupOptions?.paymentPolicies.length ? (
+                            <div className="option-chips">
+                              {ebaySetupOptions.paymentPolicies.map((option) => (
+                                <button
+                                  className={`option-chip ${draft.paymentPolicyId === option.id ? "selected" : ""}`}
+                                  key={option.id}
+                                  onClick={() => applySetupValue(channel.id, "paymentPolicyId", option.id)}
+                                  type="button"
+                                >
+                                  <span>{option.label}</span>
+                                  <small>{option.detail ?? option.id}</small>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
                         </label>
                         <label className="field">
                           <span>{dictionary.channelManager.returnPolicyId}</span>
@@ -420,6 +552,21 @@ export function ChannelConnectionManager({
                               updateDraft(channel.id, "returnPolicyId", event.target.value)
                             }
                           />
+                          {ebaySetupOptions?.returnPolicies.length ? (
+                            <div className="option-chips">
+                              {ebaySetupOptions.returnPolicies.map((option) => (
+                                <button
+                                  className={`option-chip ${draft.returnPolicyId === option.id ? "selected" : ""}`}
+                                  key={option.id}
+                                  onClick={() => applySetupValue(channel.id, "returnPolicyId", option.id)}
+                                  type="button"
+                                >
+                                  <span>{option.label}</span>
+                                  <small>{option.detail ?? option.id}</small>
+                                </button>
+                              ))}
+                            </div>
+                          ) : null}
                         </label>
                         <label className="field">
                           <span>{dictionary.channelManager.currency}</span>

@@ -163,6 +163,12 @@ export const en = {
     oauthBehaviorTitle: "How this connect works",
     oauthBehaviorDescription:
       "If the seller is already signed into eBay Sandbox, the connection can complete instantly without showing another login screen.",
+    importSellerSetupTitle: "Import seller setup",
+    importSellerSetupHint: "Load merchant locations and business policies from the connected eBay account, then pick the right IDs without leaving OmniList.",
+    importFromEbay: "Import from eBay",
+    loadingEbaySetup: "Loading seller setup...",
+    loadedEbaySetup: "Imported eBay seller setup options.",
+    couldNotLoadEbaySetup: "Could not load eBay seller setup.",
     marketplaceId: "Marketplace ID",
     merchantLocationKey: "Merchant location key",
     fulfillmentPolicyId: "Fulfillment policy ID",
