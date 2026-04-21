@@ -9,7 +9,6 @@ export type PublishJobStatus = "queued" | "processing" | "completed" | "partial"
 export type PublishTargetStatus = "queued" | "processing" | "published" | "failed";
 
 export type ConnectionStatus = "connected" | "attention_required" | "disconnected";
-export type AuthProviderId = "google" | "facebook";
 export type WorkspacePlan = "free" | "pro";
 export type ChannelConnectionMode = "manual" | "oauth";
 export type InventoryAdjustmentSource = "manual" | "order" | "channel_sync";
@@ -38,12 +37,6 @@ export interface User {
 export interface AuthSession {
   user: User;
   workspace: Workspace;
-}
-
-export interface AuthProvider {
-  id: AuthProviderId;
-  name: string;
-  enabled: boolean;
 }
 
 export interface ChannelConnection {

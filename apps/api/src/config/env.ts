@@ -4,10 +4,6 @@ export interface ApiEnv {
   port: number;
   publicApiUrl: string;
   publicWebUrl: string;
-  googleClientId?: string;
-  googleClientSecret?: string;
-  facebookClientId?: string;
-  facebookClientSecret?: string;
   ebayClientId?: string;
   ebayClientSecret?: string;
   ebayRedirectUriName?: string;
@@ -36,10 +32,6 @@ export function getEnv(): ApiEnv {
     port,
     publicApiUrl: process.env.OMNILIST_API_URL ?? `http://localhost:${port}`,
     publicWebUrl: process.env.OMNILIST_WEB_URL ?? "http://localhost:3000",
-    googleClientId: process.env.GOOGLE_CLIENT_ID,
-    googleClientSecret: process.env.GOOGLE_CLIENT_SECRET,
-    facebookClientId: process.env.FACEBOOK_CLIENT_ID,
-    facebookClientSecret: process.env.FACEBOOK_CLIENT_SECRET,
     ebayClientId: process.env.EBAY_CLIENT_ID,
     ebayClientSecret: process.env.EBAY_CLIENT_SECRET,
     ebayRedirectUriName: process.env.EBAY_REDIRECT_URI_NAME,

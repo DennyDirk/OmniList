@@ -4,14 +4,14 @@ import { redirect } from "next/navigation";
 
 import { AuthForm } from "../../components/auth-form";
 import { SocialAuthButtons } from "../../components/social-auth-buttons";
-import { getAuthProviders, getClientApiBaseUrl, getAuthSession } from "../../lib/api";
+import { getAuthSession } from "../../lib/api";
 import { getI18n } from "../../lib/i18n.server";
 
 export default async function LoginPage() {
   const homeRoute = "/" as Route;
   const registerRoute = "/register" as Route;
   const { dictionary, locale } = await getI18n();
-  const [session, providers] = await Promise.all([getAuthSession(), getAuthProviders()]);
+  const session = await getAuthSession();
 
   if (session) {
     redirect(homeRoute);
@@ -26,9 +26,9 @@ export default async function LoginPage() {
       </section>
 
       <section className="card auth-wrap">
-        <AuthForm apiBaseUrl={getClientApiBaseUrl()} locale={locale} mode="login" />
+        <AuthForm locale={locale} mode="login" />
         <div className="auth-divider">{dictionary.common.or}</div>
-        <SocialAuthButtons apiBaseUrl={getClientApiBaseUrl()} locale={locale} providers={providers} />
+        <SocialAuthButtons locale={locale} />
         <p className="muted">
           {dictionary.loginPage.needAccount} <Link href={registerRoute}>{dictionary.loginPage.createOne}</Link>
         </p>

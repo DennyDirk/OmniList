@@ -2,32 +2,25 @@
 
 import type { Route } from "next";
 import { useRouter } from "next/navigation";
-import { useTransition } from "react";
+import { useMemo, useTransition } from "react";
 
 import { dictionaries, type Locale } from "../lib/i18n";
+import { createClient } from "../lib/supabase/client";
 
 const loginRoute = "/login" as Route;
 
 interface LogoutButtonProps {
-  apiBaseUrl: string;
   locale: Locale;
 }
 
-export function LogoutButton({ apiBaseUrl, locale }: LogoutButtonProps) {
+export function LogoutButton({ locale }: LogoutButtonProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const dictionary = dictionaries[locale];
+  const supabase = useMemo(() => createClient(), []);
 
   async function handleLogout() {
-    if (!apiBaseUrl) {
-      router.push(loginRoute);
-      return;
-    }
-
-    await fetch(`${apiBaseUrl}/auth/logout`, {
-      method: "POST",
-      credentials: "include"
-    });
+    await supabase.auth.signOut();
 
     startTransition(() => {
       router.push(loginRoute);

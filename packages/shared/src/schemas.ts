@@ -2,7 +2,6 @@ import { z } from "zod";
 
 export const channelIdSchema = z.enum(["shopify", "ebay", "etsy"]);
 export const connectionStatusSchema = z.enum(["connected", "attention_required", "disconnected"]);
-export const authProviderIdSchema = z.enum(["google", "facebook"]);
 export const workspacePlanSchema = z.enum(["free", "pro"]);
 export const inventoryAdjustmentSourceSchema = z.enum(["manual", "order", "channel_sync"]);
 export const publishJobStatusSchema = z.enum(["queued", "processing", "completed", "partial", "failed"]);
@@ -37,12 +36,6 @@ export const userSchema = z.object({
 export const authSessionSchema = z.object({
   user: userSchema,
   workspace: workspaceSchema
-});
-
-export const authProviderSchema = z.object({
-  id: authProviderIdSchema,
-  name: z.string().min(1),
-  enabled: z.boolean()
 });
 
 export const channelConnectionSchema = z.object({

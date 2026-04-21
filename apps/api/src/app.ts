@@ -3,14 +3,11 @@ import cors from "@fastify/cors";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import {
   channelConnectionUpsertInputSchema,
-  authProviderIdSchema,
   bulkPublishJobRequestSchema,
   inventoryAdjustmentInputSchema,
-  loginInputSchema,
   publishJobRequestSchema,
   productUpsertInputSchema,
   publishPreviewRequestSchema,
-  registerInputSchema,
   workspacePlanChangeInputSchema,
   type ChannelId
 } from "@omnilist/shared";
@@ -19,8 +16,7 @@ import { ZodError } from "zod";
 import { createDbClient } from "./db/client";
 import { bootstrapDatabase } from "./db/bootstrap";
 import { getEnv } from "./config/env";
-import { createAuthRepository } from "./modules/auth/auth.repository";
-import { createAuthService, OAUTH_STATE_COOKIE_NAME, SESSION_COOKIE_NAME } from "./modules/auth/auth.service";
+import { createAuthService, extractAccessToken } from "./modules/auth/auth.service";
 import { createProductRepository } from "./modules/catalog/catalog.repository";
 import { createCatalogService } from "./modules/catalog/catalog.service";
 import { createChannelConnectionRepository } from "./modules/channels/channel-connections.repository";
@@ -35,6 +31,7 @@ import { createPublishJobRepository } from "./modules/publishing/publishing.repo
 import { buildPublishPreview } from "./modules/publishing/publishing.service";
 import { createPublishingService } from "./modules/publishing/publishing.service";
 import { validateProductAcrossChannels } from "./modules/validation/validation.service";
+import { createWorkspaceRepository } from "./modules/workspace/workspace.repository";
 import { createWorkspaceService } from "./modules/workspace/workspace.service";
 
 function normalizeChannelIds(value: unknown): ChannelId[] {
@@ -52,8 +49,8 @@ export async function buildApp() {
   const env = getEnv();
   const app = Fastify({ logger: true });
   const db = env.databaseUrl ? createDbClient(env.databaseUrl) : undefined;
-  const authRepository = createAuthRepository(db);
-  const authService = createAuthService(env, authRepository);
+  const workspaceRepository = createWorkspaceRepository(db);
+  const authService = createAuthService(env, workspaceRepository, db);
   const productRepository = createProductRepository(db);
   const channelConnectionRepository = createChannelConnectionRepository(db);
   const publishJobRepository = createPublishJobRepository(db);
@@ -64,7 +61,7 @@ export async function buildApp() {
   const channelConnectionsService = createChannelConnectionsService(channelConnectionRepository);
   const channelAuthService = createChannelAuthService(channelConnectionRepository, env);
   const publishingService = createPublishingService(publishJobRepository, channelConnectionRepository, env);
-  const workspaceService = createWorkspaceService(authRepository, productRepository);
+  const workspaceService = createWorkspaceService(workspaceRepository, productRepository);
 
   if (db) {
     await bootstrapDatabase(db);
@@ -80,7 +77,7 @@ export async function buildApp() {
   });
 
   async function getRequiredSession(request: FastifyRequest, reply: FastifyReply) {
-    const session = await authService.getSession(request.cookies[SESSION_COOKIE_NAME]);
+    const session = await authService.getSession(extractAccessToken(request.headers.authorization));
 
     if (!session) {
       await reply.code(401).send({
@@ -105,81 +102,8 @@ export async function buildApp() {
     items: channelAuthService.listCapabilities()
   }));
 
-  app.post("/auth/register", async (request, reply) => {
-    try {
-      const input = registerInputSchema.parse(request.body);
-      const result = await authService.register(input);
-
-      reply.setCookie(SESSION_COOKIE_NAME, result.sessionToken, {
-        httpOnly: true,
-        path: "/",
-        sameSite: "lax"
-      });
-
-      return reply.code(201).send({
-        item: result.session
-      });
-    } catch (error) {
-      if (error instanceof ZodError) {
-        return reply.code(400).send({
-          message: "Invalid registration payload.",
-          issues: error.flatten()
-        });
-      }
-
-      if (error instanceof Error && error.message === "EMAIL_TAKEN") {
-        return reply.code(409).send({
-          message: "A user with this email already exists."
-        });
-      }
-
-      throw error;
-    }
-  });
-
-  app.post("/auth/login", async (request, reply) => {
-    try {
-      const input = loginInputSchema.parse(request.body);
-      const result = await authService.login(input);
-
-      if (!result) {
-        return reply.code(401).send({
-          message: "Invalid email or password."
-        });
-      }
-
-      reply.setCookie(SESSION_COOKIE_NAME, result.sessionToken, {
-        httpOnly: true,
-        path: "/",
-        sameSite: "lax"
-      });
-
-      return {
-        item: result.session
-      };
-    } catch (error) {
-      if (error instanceof ZodError) {
-        return reply.code(400).send({
-          message: "Invalid login payload.",
-          issues: error.flatten()
-        });
-      }
-
-      throw error;
-    }
-  });
-
-  app.post("/auth/logout", async (request, reply) => {
-    await authService.logout(request.cookies[SESSION_COOKIE_NAME]);
-    reply.clearCookie(SESSION_COOKIE_NAME, {
-      path: "/"
-    });
-
-    return reply.code(204).send();
-  });
-
   app.get("/auth/session", async (request, reply) => {
-    const session = await authService.getSession(request.cookies[SESSION_COOKIE_NAME]);
+    const session = await authService.getSession(extractAccessToken(request.headers.authorization));
 
     if (!session) {
       return reply.code(401).send({
@@ -190,94 +114,6 @@ export async function buildApp() {
     return {
       item: session
     };
-  });
-
-  app.get("/auth/providers", async () => ({
-    items: authService.listProviders()
-  }));
-
-  app.get("/auth/oauth/:provider/start", async (request, reply) => {
-    try {
-      const params = request.params as { provider: string };
-      const provider = authProviderIdSchema.parse(params.provider);
-      const result = authService.beginOAuth(provider);
-
-      reply.setCookie(OAUTH_STATE_COOKIE_NAME, result.state, {
-        httpOnly: true,
-        path: "/",
-        sameSite: "lax"
-      });
-
-      return reply.redirect(result.authorizationUrl);
-    } catch (error) {
-      if (error instanceof ZodError) {
-        return reply.code(400).send({
-          message: "Unsupported OAuth provider."
-        });
-      }
-
-      if (error instanceof Error && error.message === "PROVIDER_NOT_CONFIGURED") {
-        return reply.code(503).send({
-          message: "OAuth provider is not configured yet."
-        });
-      }
-
-      throw error;
-    }
-  });
-
-  app.get("/auth/oauth/:provider/callback", async (request, reply) => {
-    try {
-      const params = request.params as { provider: string };
-      const query = request.query as { code?: string; state?: string };
-      const provider = authProviderIdSchema.parse(params.provider);
-
-      if (!query.code || !query.state) {
-        return reply.code(400).send({
-          message: "Missing OAuth callback parameters."
-        });
-      }
-
-      const result = await authService.finishOAuth(
-        provider,
-        query.code,
-        query.state,
-        request.cookies[OAUTH_STATE_COOKIE_NAME]
-      );
-
-      reply.setCookie(SESSION_COOKIE_NAME, result.sessionToken, {
-        httpOnly: true,
-        path: "/",
-        sameSite: "lax"
-      });
-
-      reply.clearCookie(OAUTH_STATE_COOKIE_NAME, {
-        path: "/"
-      });
-
-      return reply.redirect(authService.getWebRedirectUrl());
-    } catch (error) {
-      if (error instanceof ZodError) {
-        return reply.code(400).send({
-          message: "Unsupported OAuth provider."
-        });
-      }
-
-      if (
-        error instanceof Error &&
-        [
-          "PROVIDER_NOT_CONFIGURED",
-          "INVALID_OAUTH_STATE",
-          "OAUTH_TOKEN_EXCHANGE_FAILED",
-          "OAUTH_PROFILE_FETCH_FAILED",
-          "OAUTH_EMAIL_REQUIRED"
-        ].includes(error.message)
-      ) {
-        return reply.redirect(`${authService.getWebRedirectUrl()}/login?error=${encodeURIComponent(error.message)}`);
-      }
-
-      throw error;
-    }
   });
 
   app.get("/workspace", async (request, reply) => {

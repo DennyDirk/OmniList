@@ -1,33 +1,48 @@
 "use client";
 
-import type { AuthProvider } from "@omnilist/shared";
+import { useMemo } from "react";
 
 import { dictionaries, type Locale } from "../lib/i18n";
+import { createClient } from "../lib/supabase/client";
+import { useFlash } from "./flash-provider";
 
 interface SocialAuthButtonsProps {
-  apiBaseUrl: string;
-  providers: AuthProvider[];
   locale: Locale;
 }
 
-export function SocialAuthButtons({ apiBaseUrl, providers, locale }: SocialAuthButtonsProps) {
+const providers = [
+  { id: "google", name: "Google" },
+  { id: "facebook", name: "Facebook" }
+] as const;
+
+export function SocialAuthButtons({ locale }: SocialAuthButtonsProps) {
   const dictionary = dictionaries[locale];
+  const supabase = useMemo(() => createClient(), []);
+  const { showFlash } = useFlash();
+
+  async function handleOAuth(provider: "google" | "facebook") {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/auth/callback`
+      }
+    });
+
+    if (error) {
+      showFlash({
+        tone: "error",
+        message: error.message
+      });
+    }
+  }
 
   return (
     <div className="social-list">
-      {providers.map((provider) => {
-        const href = `${apiBaseUrl}/auth/oauth/${provider.id}/start`;
-
-        return provider.enabled ? (
-          <a className="social-button" href={href} key={provider.id}>
-            {dictionary.socialAuth.continueWith(provider.name)}
-          </a>
-        ) : (
-          <div className="social-button disabled" key={provider.id}>
-            {dictionary.socialAuth.notConfigured(provider.name)}
-          </div>
-        );
-      })}
+      {providers.map((provider) => (
+        <button className="social-button" key={provider.id} onClick={() => void handleOAuth(provider.id)} type="button">
+          {dictionary.socialAuth.continueWith(provider.name)}
+        </button>
+      ))}
     </div>
   );
 }

@@ -4,19 +4,20 @@ import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useState, useTransition, type FormEvent } from "react";
 
 import { dictionaries, type Locale } from "../lib/i18n";
+import { createClient } from "../lib/supabase/client";
 import { useFlash } from "./flash-provider";
 
 interface AuthFormProps {
-  apiBaseUrl: string;
   mode: "login" | "register";
   locale: Locale;
 }
 
-export function AuthForm({ apiBaseUrl, mode, locale }: AuthFormProps) {
+export function AuthForm({ mode, locale }: AuthFormProps) {
   const router = useRouter();
   const [isPending, startTransition] = useTransition();
   const { showFlash } = useFlash();
   const dictionary = dictionaries[locale];
+  const supabase = useMemo(() => createClient(), []);
   const searchError = useMemo(
     () => (typeof window !== "undefined" ? new URLSearchParams(window.location.search).get("error") : null),
     []
@@ -47,42 +48,35 @@ export function AuthForm({ apiBaseUrl, mode, locale }: AuthFormProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
-    if (!apiBaseUrl) {
+    const result =
+      mode === "login"
+        ? await supabase.auth.signInWithPassword({
+            email: form.email.trim(),
+            password: form.password
+          })
+        : await supabase.auth.signUp({
+            email: form.email.trim(),
+            password: form.password,
+            options: {
+              data: {
+                name: form.name.trim(),
+                workspaceName: form.workspaceName.trim() || undefined
+              }
+            }
+          });
+
+    if (result.error) {
       showFlash({
         tone: "error",
-        message: dictionary.authForm.missingApi
+        message: result.error.message || dictionary.authForm.authFailed
       });
       return;
     }
 
-    const endpoint = mode === "login" ? `${apiBaseUrl}/auth/login` : `${apiBaseUrl}/auth/register`;
-    const payload =
-      mode === "login"
-        ? {
-            email: form.email,
-            password: form.password
-          }
-        : {
-            name: form.name,
-            workspaceName: form.workspaceName || undefined,
-            email: form.email,
-            password: form.password
-          };
-
-    const response = await fetch(endpoint, {
-      method: "POST",
-      credentials: "include",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(payload)
-    });
-
-    if (!response.ok) {
-      const body = (await response.json().catch(() => undefined)) as { message?: string } | undefined;
+    if (mode === "register" && !result.data.session) {
       showFlash({
-        tone: "error",
-        message: body?.message ?? dictionary.authForm.authFailed
+        tone: "success",
+        message: "Account created. Check your email to confirm sign-in."
       });
       return;
     }

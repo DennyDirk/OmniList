@@ -1,6 +1,4 @@
-import { cookies } from "next/headers";
 import type {
-  AuthProvider,
   AuthSession,
   Channel,
   ChannelConnection,
@@ -14,14 +12,17 @@ import type {
   WorkspaceUsage
 } from "@omnilist/shared";
 
+import { createClient as createSupabaseServerClient } from "./supabase/server";
+
 const apiBaseUrl = process.env.OMNILIST_API_URL ?? process.env.NEXT_PUBLIC_OMNILIST_API_URL ?? "http://localhost:4000";
 
-async function buildCookieHeader() {
-  const cookieStore = await cookies();
-  return cookieStore
-    .getAll()
-    .map((item) => `${item.name}=${item.value}`)
-    .join("; ");
+async function buildAuthorizationHeader() {
+  const supabase = await createSupabaseServerClient();
+  const {
+    data: { session }
+  } = await supabase.auth.getSession();
+
+  return session?.access_token ? `Bearer ${session.access_token}` : undefined;
 }
 
 async function requestJson<T>(path: string): Promise<{ status: number; data?: T }> {
@@ -31,14 +32,14 @@ async function requestJson<T>(path: string): Promise<{ status: number; data?: T 
     };
   }
 
-  const cookieHeader = await buildCookieHeader();
+  const authorizationHeader = await buildAuthorizationHeader();
 
   try {
     const response = await fetch(`${apiBaseUrl}${path}`, {
       cache: "no-store",
-      headers: cookieHeader
+      headers: authorizationHeader
         ? {
-            cookie: cookieHeader
+            Authorization: authorizationHeader
           }
         : undefined
     });
@@ -63,16 +64,6 @@ async function requestJson<T>(path: string): Promise<{ status: number; data?: T 
 export async function getAuthSession() {
   const response = await requestJson<{ item: AuthSession }>("/auth/session");
   return response.data?.item;
-}
-
-export async function getAuthProviders() {
-  const response = await requestJson<{ items: AuthProvider[] }>("/auth/providers");
-  return (
-    response.data?.items ?? [
-      { id: "google", name: "Google", enabled: false },
-      { id: "facebook", name: "Facebook", enabled: false }
-    ]
-  );
 }
 
 export async function getProducts() {

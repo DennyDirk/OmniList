@@ -1,5 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { createRouteClient } from "../../../../lib/supabase/route";
+
 const upstreamApiBaseUrl =
   process.env.OMNILIST_API_URL ?? process.env.NEXT_PUBLIC_OMNILIST_API_URL ?? "http://localhost:4000";
 
@@ -125,9 +127,20 @@ function applySetCookieHeaders(request: NextRequest, response: NextResponse, ups
   }
 }
 
+function applyResponseCookies(from: NextResponse, to: NextResponse) {
+  for (const cookie of from.cookies.getAll()) {
+    to.cookies.set(cookie);
+  }
+}
+
 async function proxyRequest(request: NextRequest, path: string[]) {
   const upstreamUrl = buildUpstreamUrl(request, path);
   const requestHeaders = new Headers();
+  const supabaseResponse = NextResponse.next();
+  const supabase = createRouteClient(request, supabaseResponse);
+  const {
+    data: { session }
+  } = await supabase.auth.getSession();
   const contentType = request.headers.get("content-type");
   const cookieHeader = request.headers.get("cookie");
 
@@ -137,6 +150,10 @@ async function proxyRequest(request: NextRequest, path: string[]) {
 
   if (cookieHeader) {
     requestHeaders.set("cookie", cookieHeader);
+  }
+
+  if (session?.access_token) {
+    requestHeaders.set("authorization", `Bearer ${session.access_token}`);
   }
 
   const upstreamResponse = await fetch(upstreamUrl, {
@@ -164,6 +181,7 @@ async function proxyRequest(request: NextRequest, path: string[]) {
     response.headers.set("content-type", responseContentType);
   }
 
+  applyResponseCookies(supabaseResponse, response);
   applySetCookieHeaders(request, response, upstreamResponse);
 
   return response;

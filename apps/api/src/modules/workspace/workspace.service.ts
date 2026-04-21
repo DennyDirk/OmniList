@@ -1,15 +1,15 @@
 import { calculateWorkspaceUsage, getWorkspacePlanDefinition, type WorkspacePlan } from "@omnilist/shared";
 
-import type { AuthRepository } from "../auth/auth.repository";
 import type { ProductRepository } from "../catalog/catalog.repository";
+import type { WorkspaceRepository } from "./workspace.repository";
 
-export function createWorkspaceService(authRepository: AuthRepository, productRepository: ProductRepository) {
+export function createWorkspaceService(workspaceRepository: WorkspaceRepository, productRepository: ProductRepository) {
   return {
     async getWorkspace(workspaceId: string) {
-      return authRepository.getWorkspace(workspaceId);
+      return workspaceRepository.getWorkspace(workspaceId);
     },
     async getWorkspaceUsage(workspaceId: string) {
-      const workspace = await authRepository.getWorkspace(workspaceId);
+      const workspace = await workspaceRepository.getWorkspace(workspaceId);
 
       if (!workspace) {
         return undefined;
@@ -20,7 +20,7 @@ export function createWorkspaceService(authRepository: AuthRepository, productRe
       return calculateWorkspaceUsage(workspace.id, workspace.subscriptionPlan, productCount);
     },
     async updateWorkspacePlan(workspaceId: string, subscriptionPlan: WorkspacePlan) {
-      return authRepository.updateWorkspacePlan(workspaceId, subscriptionPlan);
+      return workspaceRepository.updateWorkspacePlan(workspaceId, subscriptionPlan);
     },
     canCreateProduct(subscriptionPlan: WorkspacePlan, productCount: number) {
       const plan = getWorkspacePlanDefinition(subscriptionPlan);

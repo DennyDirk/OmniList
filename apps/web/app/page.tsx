@@ -67,7 +67,7 @@ export default async function DashboardPage() {
           <Link className="cta" href="/products/new">
             {dictionary.common.createProduct}
           </Link>
-          <LogoutButton apiBaseUrl={getClientApiBaseUrl()} locale={locale} />
+          <LogoutButton locale={locale} />
         </div>
       </section>
 
