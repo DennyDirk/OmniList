@@ -18,6 +18,9 @@ export async function GET(request: NextRequest) {
   }
 
   const supabase = createRouteClient(request, response);
+  if (!supabase) {
+    return NextResponse.redirect(new URL("/login?error=SUPABASE_NOT_CONFIGURED", requestUrl.origin));
+  }
   const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
 
   if (exchangeError) {

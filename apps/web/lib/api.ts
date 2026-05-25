@@ -18,6 +18,9 @@ const apiBaseUrl = process.env.OMNILIST_API_URL ?? process.env.NEXT_PUBLIC_OMNIL
 
 async function buildAuthorizationHeader() {
   const supabase = await createSupabaseServerClient();
+  if (!supabase) {
+    return undefined;
+  }
   const {
     data: { session }
   } = await supabase.auth.getSession();

@@ -20,6 +20,11 @@ export function LogoutButton({ locale }: LogoutButtonProps) {
   const supabase = useMemo(() => createClient(), []);
 
   async function handleLogout() {
+    if (!supabase) {
+      router.push(loginRoute);
+      return;
+    }
+
     await supabase.auth.signOut();
 
     startTransition(() => {

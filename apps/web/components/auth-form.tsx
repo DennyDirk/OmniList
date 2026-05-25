@@ -48,6 +48,14 @@ export function AuthForm({ mode, locale }: AuthFormProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (!supabase) {
+      showFlash({
+        tone: "error",
+        message: "Supabase Auth is not configured."
+      });
+      return;
+    }
+
     const result =
       mode === "login"
         ? await supabase.auth.signInWithPassword({

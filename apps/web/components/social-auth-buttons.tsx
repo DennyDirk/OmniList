@@ -21,6 +21,14 @@ export function SocialAuthButtons({ locale }: SocialAuthButtonsProps) {
   const { showFlash } = useFlash();
 
   async function handleOAuth(provider: "google" | "facebook") {
+    if (!supabase) {
+      showFlash({
+        tone: "error",
+        message: "Supabase Auth is not configured."
+      });
+      return;
+    }
+
     const { error } = await supabase.auth.signInWithOAuth({
       provider,
       options: {

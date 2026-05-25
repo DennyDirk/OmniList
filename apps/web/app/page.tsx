@@ -1,5 +1,6 @@
 import type { Route } from "next";
 import Link from "next/link";
+import { redirect } from "next/navigation";
 
 import { BulkPublishCard } from "../components/bulk-publish-card";
 import { LogoutButton } from "../components/logout-button";
@@ -20,6 +21,9 @@ import { getReadinessForAllChannels } from "../lib/readiness";
 export default async function DashboardPage() {
   const { dictionary, locale } = await getI18n();
   const session = await requireAuthSession();
+  if (!session) {
+    redirect("/login?error=SUPABASE_NOT_CONFIGURED");
+  }
   const [products, channels, workspace, connections, publishJobs, workspaceUsage] = await Promise.all([
     getProducts(),
     getChannels(),

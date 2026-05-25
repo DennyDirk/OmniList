@@ -138,9 +138,11 @@ async function proxyRequest(request: NextRequest, path: string[]) {
   const requestHeaders = new Headers();
   const supabaseResponse = NextResponse.next();
   const supabase = createRouteClient(request, supabaseResponse);
-  const {
-    data: { session }
-  } = await supabase.auth.getSession();
+  const session = supabase
+    ? (
+        await supabase.auth.getSession()
+      ).data.session
+    : undefined;
   const contentType = request.headers.get("content-type");
   const cookieHeader = request.headers.get("cookie");
 
