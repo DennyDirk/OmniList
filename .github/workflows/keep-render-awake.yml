@@ -2,15 +2,20 @@ name: Keep Render Awake
 
 on:
   schedule:
-    - cron: "*/10 * * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
   ping-api:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: Ping Render health endpoint
         run: |
           curl --fail --silent --show-error \
-            --max-time 30 \
+            --connect-timeout 15 \
+            --max-time 120 \
+            --retry 2 \
+            --retry-delay 5 \
+            --retry-all-errors \
             https://omnilist-api-xm05.onrender.com/health
