@@ -66,6 +66,8 @@ export function AuthForm({ mode, locale }: AuthFormProps) {
             email: form.email.trim(),
             password: form.password,
             options: {
+              emailRedirectTo:
+                typeof window !== "undefined" ? `${window.location.origin}/auth/callback` : undefined,
               data: {
                 name: form.name.trim(),
                 workspaceName: form.workspaceName.trim() || undefined
