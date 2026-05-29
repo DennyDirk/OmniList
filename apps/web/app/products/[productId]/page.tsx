@@ -39,7 +39,34 @@ export default async function ProductWorkspacePage({
 
   const readinessItems = getReadinessForAllChannels(product);
   const ebayDraft = await getChannelDraftPreview(product.id, "ebay");
+  const ebayConnection = connections.find((connection) => connection.channelId === "ebay");
+  const ebayReadiness = readinessItems.find((item) => item.channel.id === "ebay")?.readiness;
   const editHref = `/products/${product.id}/edit` as Route;
+  const channelsHref = "/channels" as Route;
+  const ebayBlockingReason =
+    ebayConnection?.status === "connected"
+      ? ebayDraft?.missingConfiguration[0] ??
+        (ebayReadiness?.status === "needs_attention"
+          ? "Fix the blocking eBay readiness issues in this product before publishing."
+          : undefined)
+      : undefined;
+  const ebayNextAction =
+    ebayConnection?.status !== "connected"
+      ? {
+          href: channelsHref,
+          label: "Open channel setup"
+        }
+      : ebayDraft?.missingConfiguration.length
+        ? {
+            href: channelsHref,
+            label: "Finish eBay setup"
+          }
+        : ebayReadiness?.status === "needs_attention"
+          ? {
+              href: editHref,
+              label: "Fix product data"
+            }
+          : undefined;
 
   return (
     <main className="shell">
@@ -110,7 +137,13 @@ export default async function ProductWorkspacePage({
           snapshot={inventory}
         />
 
-        <PublishProductCard apiBaseUrl={getClientApiBaseUrl()} connections={connections} locale={locale} productId={product.id} />
+        <PublishProductCard
+          apiBaseUrl={getClientApiBaseUrl()}
+          blockingReasons={ebayBlockingReason ? { ebay: ebayBlockingReason } : undefined}
+          connections={connections}
+          locale={locale}
+          productId={product.id}
+        />
 
         <article className="card">
           <h3>{dictionary.common.recentJobs}</h3>
@@ -143,6 +176,66 @@ export default async function ProductWorkspacePage({
             )}
           </div>
         </article>
+
+        {ebayDraft ? (
+          <article className="card">
+            <h3>First eBay publish</h3>
+            <p className="muted">
+              Move through these steps once, then this product can be published to eBay in one click.
+            </p>
+            <div className="list" style={{ marginTop: 16 }}>
+              <div className={`issue ${ebayConnection?.status === "connected" ? "suggestion" : "warning"}`}>
+                <strong>1. eBay account</strong>
+                <div>
+                  {ebayConnection?.status === "connected"
+                    ? `Connected as ${ebayConnection.externalAccountId ?? "eBay seller"}.`
+                    : "Connect the eBay seller account first."}
+                </div>
+              </div>
+              <div className={`issue ${ebayDraft.missingConfiguration.length === 0 ? "suggestion" : "warning"}`}>
+                <strong>2. eBay selling setup</strong>
+                <div>
+                  {ebayDraft.missingConfiguration.length === 0
+                    ? "Merchant location and business policy prerequisites are filled in."
+                    : ebayDraft.missingConfiguration[0]}
+                </div>
+              </div>
+              <div className={`issue ${ebayReadiness?.status === "ready" ? "suggestion" : "warning"}`}>
+                <strong>3. Product readiness</strong>
+                <div>
+                  {ebayReadiness?.status === "ready"
+                    ? "This product is ready for eBay validation rules."
+                    : "Fix the blocking product issues in the eBay readiness card above."}
+                </div>
+              </div>
+              <div
+                className={`issue ${
+                  ebayConnection?.status === "connected" &&
+                  ebayDraft.missingConfiguration.length === 0 &&
+                  ebayReadiness?.status === "ready"
+                    ? "suggestion"
+                    : "warning"
+                }`}
+              >
+                <strong>4. Publish</strong>
+                <div>
+                  {ebayConnection?.status === "connected" &&
+                  ebayDraft.missingConfiguration.length === 0 &&
+                  ebayReadiness?.status === "ready"
+                    ? "Use the publish card to send this product to eBay."
+                    : "Finish the steps above and the publish action will unlock automatically."}
+                </div>
+              </div>
+            </div>
+            {ebayNextAction ? (
+              <div className="editor-actions">
+                <Link className="button-primary" href={ebayNextAction.href}>
+                  {ebayNextAction.label}
+                </Link>
+              </div>
+            ) : null}
+          </article>
+        ) : null}
 
         {ebayDraft ? (
           <article className="card">

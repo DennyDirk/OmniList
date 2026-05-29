@@ -12,18 +12,31 @@ interface PublishProductCardProps {
   productId: string;
   connections: ChannelConnection[];
   locale: Locale;
+  blockingReasons?: Partial<Record<ChannelId, string>>;
 }
 
-export function PublishProductCard({ apiBaseUrl, productId, connections, locale }: PublishProductCardProps) {
+export function PublishProductCard({
+  apiBaseUrl,
+  productId,
+  connections,
+  locale,
+  blockingReasons = {}
+}: PublishProductCardProps) {
   const router = useRouter();
   const dictionary = dictionaries[locale];
   const { showFlash } = useFlash();
   const [selected, setSelected] = useState<Record<string, boolean>>(
-    Object.fromEntries(connections.map((connection) => [connection.channelId, connection.status === "connected"]))
+    Object.fromEntries(
+      connections.map((connection) => [
+        connection.channelId,
+        connection.status === "connected" && !blockingReasons[connection.channelId]
+      ])
+    )
   );
   const [isPending, startTransition] = useTransition();
 
   const connectedChannels = connections.filter((connection) => connection.status === "connected");
+  const selectableConnectedChannels = connectedChannels.filter((connection) => !blockingReasons[connection.channelId]);
 
   async function handlePublish() {
     if (!apiBaseUrl) {
@@ -34,14 +47,17 @@ export function PublishProductCard({ apiBaseUrl, productId, connections, locale 
       return;
     }
 
-    const channelIds = connectedChannels
+    const channelIds = selectableConnectedChannels
       .filter((connection) => selected[connection.channelId])
       .map((connection) => connection.channelId) as ChannelId[];
 
     if (channelIds.length === 0) {
+      const firstBlockingChannel = connectedChannels.find((connection) => blockingReasons[connection.channelId]);
+      const firstBlockingReason = firstBlockingChannel ? blockingReasons[firstBlockingChannel.channelId] : undefined;
+
       showFlash({
         tone: "error",
-        message: dictionary.publishCard.selectChannel
+        message: firstBlockingReason ?? dictionary.publishCard.selectChannel
       });
       return;
     }
@@ -93,7 +109,7 @@ export function PublishProductCard({ apiBaseUrl, productId, connections, locale 
           <label className="list-item checkbox-row" key={connection.id}>
             <input
               checked={Boolean(selected[connection.channelId])}
-              disabled={connection.status !== "connected"}
+              disabled={connection.status !== "connected" || Boolean(blockingReasons[connection.channelId])}
               onChange={(event) =>
                 setSelected((current) => ({
                   ...current,
@@ -103,7 +119,15 @@ export function PublishProductCard({ apiBaseUrl, productId, connections, locale 
               type="checkbox"
             />
             <span>
-              {connection.channelId} {connection.status !== "connected" ? `(${formatConnectionStatus(dictionary, connection.status)})` : ""}
+              <div>
+                {connection.channelId}{" "}
+                {connection.status !== "connected" ? `(${formatConnectionStatus(dictionary, connection.status)})` : ""}
+              </div>
+              {blockingReasons[connection.channelId] ? (
+                <div className="muted" style={{ marginTop: 4 }}>
+                  {blockingReasons[connection.channelId]}
+                </div>
+              ) : null}
             </span>
           </label>
         ))}
