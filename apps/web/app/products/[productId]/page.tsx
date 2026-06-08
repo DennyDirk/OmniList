@@ -160,7 +160,10 @@ export default async function ProductWorkspacePage({
                   <div className="list compact-list">
                     {job.targets.map((target) => (
                       <div className="publish-target" key={target.id}>
-                        <span>{target.channelName}</span>
+                        <div>
+                          <div>{target.channelName}</div>
+                          {target.message ? <div className="publish-target-message muted">{target.message}</div> : null}
+                        </div>
                         <span
                           className={`pill ${
                             target.status === "published" ? "ready" : target.status === "failed" ? "attention" : ""

@@ -403,6 +403,13 @@ a {
   gap: 12px;
 }
 
+.publish-target-message {
+  margin-top: 4px;
+  max-width: 36ch;
+  font-size: 0.82rem;
+  line-height: 1.45;
+}
+
 .bulk-card {
   display: grid;
   gap: 18px;
