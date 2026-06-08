@@ -46,8 +46,8 @@ function parseJsonSafely<TResponse>(text: string) {
   }
 }
 
-function looksLikeInputError(message: string) {
-  return /input error|invalid \./i.test(message);
+function looksLikeIgnorableSandboxSetupError(message: string) {
+  return /input error|invalid \.|system error\.?/i.test(message);
 }
 
 export function hasRequiredEbayScopes(credentials: Record<string, string>, requiredScopes: string[]) {
@@ -352,10 +352,11 @@ export async function getEbaySellerSetupOptions(
     fulfillmentPoliciesResponse.data?.errors?.[0]?.message || fulfillmentPoliciesResponse.rawText || "";
   const paymentErrorMessage = paymentPoliciesResponse.data?.errors?.[0]?.message || paymentPoliciesResponse.rawText || "";
   const returnErrorMessage = returnPoliciesResponse.data?.errors?.[0]?.message || returnPoliciesResponse.rawText || "";
-  const canIgnoreLocationFailure = !locationsResponse.ok && looksLikeInputError(locationErrorMessage);
-  const canIgnoreFulfillmentFailure = !fulfillmentPoliciesResponse.ok && looksLikeInputError(fulfillmentErrorMessage);
-  const canIgnorePaymentFailure = !paymentPoliciesResponse.ok && looksLikeInputError(paymentErrorMessage);
-  const canIgnoreReturnFailure = !returnPoliciesResponse.ok && looksLikeInputError(returnErrorMessage);
+  const canIgnoreLocationFailure = !locationsResponse.ok && looksLikeIgnorableSandboxSetupError(locationErrorMessage);
+  const canIgnoreFulfillmentFailure =
+    !fulfillmentPoliciesResponse.ok && looksLikeIgnorableSandboxSetupError(fulfillmentErrorMessage);
+  const canIgnorePaymentFailure = !paymentPoliciesResponse.ok && looksLikeIgnorableSandboxSetupError(paymentErrorMessage);
+  const canIgnoreReturnFailure = !returnPoliciesResponse.ok && looksLikeIgnorableSandboxSetupError(returnErrorMessage);
 
   if (canIgnoreLocationFailure) {
     warnings.push("eBay did not return inventory locations for this sandbox account. Add merchantLocationKey manually or create an inventory location in eBay.");
