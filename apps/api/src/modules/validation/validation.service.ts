@@ -129,6 +129,27 @@ function calculateScore(issues: ValidationIssue[]) {
 export function validateProductForChannel(product: Product, channelId: ChannelId): ChannelReadiness {
   const effectiveProduct = getEffectiveProductForChannel(product, channelId);
   const issues = buildFieldIssues(effectiveProduct, channelId);
+
+  if (channelId === "ebay") {
+    const ebayCategoryId = product.channelOverrides.ebay?.categoryId?.trim();
+
+    if (!ebayCategoryId) {
+      issues.push({
+        code: "missing_ebay_category_id",
+        field: "ebayCategoryId",
+        severity: "blocking",
+        message: "Add a numeric eBay category ID in the product's eBay override settings."
+      });
+    } else if (!/^\d+$/.test(ebayCategoryId)) {
+      issues.push({
+        code: "invalid_ebay_category_id",
+        field: "ebayCategoryId",
+        severity: "blocking",
+        message: "eBay category ID must contain digits only."
+      });
+    }
+  }
+
   const hasBlockingIssue = issues.some((issue) => issue.severity === "blocking");
 
   return {

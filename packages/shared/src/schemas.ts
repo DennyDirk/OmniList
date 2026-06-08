@@ -86,7 +86,8 @@ export const productVariantSchema = z.object({
 export const productChannelOverrideSchema = z.object({
   title: z.string().min(3).optional(),
   description: z.string().min(10).optional(),
-  price: z.number().nonnegative().optional()
+  price: z.number().nonnegative().optional(),
+  categoryId: z.string().min(1).optional()
 });
 
 export const productChannelOverridesSchema = z

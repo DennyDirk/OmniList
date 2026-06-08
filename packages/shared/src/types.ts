@@ -78,6 +78,7 @@ export interface ProductChannelOverride {
   title?: string;
   description?: string;
   price?: number;
+  categoryId?: string;
 }
 
 export interface Product {

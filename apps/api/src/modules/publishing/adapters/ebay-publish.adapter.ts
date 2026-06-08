@@ -21,6 +21,7 @@ function getMetadataValue(connection: ChannelConnectionRecord | undefined, key: 
 
 function buildEbayDraft(product: Product, connection?: ChannelConnectionRecord): ChannelDraftPreview {
   const effectiveProduct = getEffectiveProductForChannel(product, "ebay");
+  const ebayCategoryId = product.channelOverrides.ebay?.categoryId?.trim() || "";
   const marketplaceId = getMetadataValue(connection, "marketplaceId", "EBAY_US");
   const merchantLocationKey = getMetadataValue(connection, "merchantLocationKey");
   const fulfillmentPolicyId = getMetadataValue(connection, "fulfillmentPolicyId");
@@ -30,8 +31,10 @@ function buildEbayDraft(product: Product, connection?: ChannelConnectionRecord):
   const currency = getMetadataValue(connection, "currency", "USD");
   const missingConfiguration: string[] = [];
 
-  if (!product.categoryId) {
-    missingConfiguration.push("Map the product to an OmniList category with an eBay category mapping.");
+  if (!ebayCategoryId) {
+    missingConfiguration.push("Set a numeric eBay category ID in the product's eBay override settings.");
+  } else if (!/^\d+$/.test(ebayCategoryId)) {
+    missingConfiguration.push("eBay category ID must be numeric.");
   }
 
   if (!merchantLocationKey) {
@@ -88,7 +91,7 @@ function buildEbayDraft(product: Product, connection?: ChannelConnectionRecord):
     marketplaceId,
     format: "FIXED_PRICE",
     availableQuantity: effectiveProduct.quantity,
-    categoryId: product.categoryId,
+    categoryId: ebayCategoryId,
     merchantLocationKey,
     listingDescription: effectiveProduct.description,
     pricingSummary: {

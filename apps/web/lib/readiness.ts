@@ -100,6 +100,26 @@ export function getReadiness(product: Product, channelId: ChannelId): ChannelRea
       : [])
   ];
 
+  if (channelId === "ebay") {
+    const ebayCategoryId = product.channelOverrides.ebay?.categoryId?.trim();
+
+    if (!ebayCategoryId) {
+      issues.push({
+        code: "missing_ebay_category_id",
+        field: "ebayCategoryId",
+        severity: "blocking",
+        message: "Add a numeric eBay category ID in the product's eBay override settings."
+      });
+    } else if (!/^\d+$/.test(ebayCategoryId)) {
+      issues.push({
+        code: "invalid_ebay_category_id",
+        field: "ebayCategoryId",
+        severity: "blocking",
+        message: "eBay category ID must contain digits only."
+      });
+    }
+  }
+
   const score = Math.max(
     0,
     issues.reduce((currentScore, issue) => {

@@ -56,6 +56,7 @@ interface ChannelOverrideDraft {
   title: string;
   description: string;
   price: string;
+  categoryId: string;
 }
 
 type ChannelOverrideErrors = Partial<Record<ChannelId, { price?: string }>>;
@@ -109,17 +110,20 @@ function buildInitialOverrides(product?: Product): Record<ChannelId, ChannelOver
     shopify: {
       title: product?.channelOverrides.shopify?.title ?? "",
       description: product?.channelOverrides.shopify?.description ?? "",
-      price: product?.channelOverrides.shopify?.price !== undefined ? String(product.channelOverrides.shopify.price) : ""
+      price: product?.channelOverrides.shopify?.price !== undefined ? String(product.channelOverrides.shopify.price) : "",
+      categoryId: product?.channelOverrides.shopify?.categoryId ?? ""
     },
     ebay: {
       title: product?.channelOverrides.ebay?.title ?? "",
       description: product?.channelOverrides.ebay?.description ?? "",
-      price: product?.channelOverrides.ebay?.price !== undefined ? String(product.channelOverrides.ebay.price) : ""
+      price: product?.channelOverrides.ebay?.price !== undefined ? String(product.channelOverrides.ebay.price) : "",
+      categoryId: product?.channelOverrides.ebay?.categoryId ?? ""
     },
     etsy: {
       title: product?.channelOverrides.etsy?.title ?? "",
       description: product?.channelOverrides.etsy?.description ?? "",
-      price: product?.channelOverrides.etsy?.price !== undefined ? String(product.channelOverrides.etsy.price) : ""
+      price: product?.channelOverrides.etsy?.price !== undefined ? String(product.channelOverrides.etsy.price) : "",
+      categoryId: product?.channelOverrides.etsy?.categoryId ?? ""
     }
   };
 }
@@ -276,10 +280,14 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
           const nextOverride = {
             title: override.title.trim() || undefined,
             description: override.description.trim() || undefined,
-            price: parsedPrice
+            price: parsedPrice,
+            categoryId: override.categoryId.trim() || undefined
           };
 
-          return nextOverride.title || nextOverride.description || nextOverride.price !== undefined
+          return nextOverride.title ||
+            nextOverride.description ||
+            nextOverride.price !== undefined ||
+            nextOverride.categoryId
             ? [[channel.id, nextOverride]]
             : [];
         })
@@ -626,6 +634,19 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
                       <span className="field-error">{channelOverrideErrors[channel.id]?.price}</span>
                     ) : null}
                   </label>
+
+                  {channel.id === "ebay" ? (
+                    <label className="field">
+                      <span>{dictionary.productEditor.overrideCategoryId}</span>
+                      <input
+                        inputMode="numeric"
+                        value={channelOverrides[channel.id].categoryId}
+                        onChange={(event) => updateChannelOverride(channel.id, "categoryId", event.target.value)}
+                        placeholder={dictionary.productEditor.overrideCategoryIdHint}
+                      />
+                      <span className="field-hint">{dictionary.productEditor.overrideCategoryIdHelp}</span>
+                    </label>
+                  ) : null}
 
                   <label className="field field-full">
                     <span>{dictionary.productEditor.overrideDescription}</span>
