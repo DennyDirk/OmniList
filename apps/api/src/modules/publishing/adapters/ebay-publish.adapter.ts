@@ -15,8 +15,50 @@ export interface ChannelPublishAdapter {
   publish(product: Product, connection: ChannelConnectionRecord): Promise<ChannelPublishExecutionResult>;
 }
 
+interface EbayApiErrorShape {
+  message?: string;
+  longMessage?: string;
+  parameters?: Array<{
+    name?: string;
+    value?: string;
+  }>;
+}
+
 function getMetadataValue(connection: ChannelConnectionRecord | undefined, key: string, fallback = "") {
   return connection?.connection.metadata[key]?.trim() || fallback;
+}
+
+function formatEbayError(
+  response: {
+    data?: {
+      errors?: EbayApiErrorShape[];
+    };
+    rawText?: string;
+  },
+  fallbackMessage: string
+) {
+  const error = response.data?.errors?.[0];
+
+  if (error) {
+    const details = [
+      error.message?.trim(),
+      error.longMessage?.trim(),
+      error.parameters
+        ?.filter((parameter) => parameter.name?.trim() && parameter.value?.trim())
+        .map((parameter) => `${parameter.name}: ${parameter.value}`)
+        .join(", ")
+    ].filter(Boolean);
+
+    if (details.length > 0) {
+      return details.join(" — ");
+    }
+  }
+
+  if (response.rawText?.trim()) {
+    return response.rawText.trim();
+  }
+
+  return fallbackMessage;
 }
 
 function buildEbayDraft(product: Product, connection?: ChannelConnectionRecord): ChannelDraftPreview {
@@ -153,7 +195,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
 
       const auth = await ensureValidEbayAccessToken(env, connection.credentials);
 
-      const inventoryResponse = await callEbayInventoryApi<{ errors?: Array<{ message?: string }> }>(env, auth.accessToken, {
+      const inventoryResponse = await callEbayInventoryApi<{ errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
         path: `/sell/inventory/v1/inventory_item/${encodeURIComponent(product.sku)}`,
         method: "PUT",
         body: (draft.payload as { inventoryItemPayload: unknown }).inventoryItemPayload
@@ -162,7 +204,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       if (!inventoryResponse.ok) {
         return {
           status: "failed",
-          message: inventoryResponse.data?.errors?.[0]?.message ?? "eBay inventory item creation failed.",
+          message: formatEbayError(inventoryResponse, "eBay inventory item creation failed."),
           updatedCredentials: auth.credentials
         };
       }
@@ -171,7 +213,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
 
       const offerSearch = await callEbayInventoryApi<{
         offers?: Array<{ offerId: string; status?: string; listing?: { listingId?: string } }>;
-        errors?: Array<{ message?: string }>;
+        errors?: EbayApiErrorShape[];
       }>(env, auth.accessToken, {
         path:
           `/sell/inventory/v1/offer?sku=${encodeURIComponent(product.sku)}` +
@@ -183,7 +225,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       if (!offerSearch.ok) {
         return {
           status: "failed",
-          message: offerSearch.data?.errors?.[0]?.message ?? "eBay offer lookup failed.",
+          message: formatEbayError(offerSearch, "eBay offer lookup failed."),
           updatedCredentials: auth.credentials
         };
       }
@@ -193,7 +235,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       let offerId = existingOffer?.offerId;
 
       if (offerId) {
-        const updateResponse = await callEbayInventoryApi<{ errors?: Array<{ message?: string }> }>(env, auth.accessToken, {
+        const updateResponse = await callEbayInventoryApi<{ errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
           path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
           method: "PUT",
           body: offerPayload
@@ -202,7 +244,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         if (!updateResponse.ok) {
           return {
             status: "failed",
-            message: updateResponse.data?.errors?.[0]?.message ?? "eBay offer update failed.",
+            message: formatEbayError(updateResponse, "eBay offer update failed."),
             updatedCredentials: auth.credentials
           };
         }
@@ -219,7 +261,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       } else {
         const createOfferResponse = await callEbayInventoryApi<{
           offerId?: string;
-          errors?: Array<{ message?: string }>;
+          errors?: EbayApiErrorShape[];
         }>(env, auth.accessToken, {
           path: "/sell/inventory/v1/offer",
           method: "POST",
@@ -229,7 +271,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         if (!createOfferResponse.ok || !createOfferResponse.data?.offerId) {
           return {
             status: "failed",
-            message: createOfferResponse.data?.errors?.[0]?.message ?? "eBay offer creation failed.",
+            message: formatEbayError(createOfferResponse, "eBay offer creation failed."),
             updatedCredentials: auth.credentials
           };
         }
@@ -239,7 +281,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
 
       const publishResponse = await callEbayInventoryApi<{
         listingId?: string;
-        errors?: Array<{ message?: string }>;
+        errors?: EbayApiErrorShape[];
       }>(env, auth.accessToken, {
         path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId!)}/publish`,
         method: "POST"
@@ -248,7 +290,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       if (!publishResponse.ok) {
         return {
           status: "failed",
-          message: publishResponse.data?.errors?.[0]?.message ?? "eBay publish offer failed.",
+          message: formatEbayError(publishResponse, "eBay publish offer failed."),
           updatedCredentials: auth.credentials
         };
       }
