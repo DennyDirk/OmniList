@@ -28,6 +28,19 @@ function getMetadataValue(connection: ChannelConnectionRecord | undefined, key: 
   return connection?.connection.metadata[key]?.trim() || fallback;
 }
 
+function buildEbayAspects(effectiveProduct: Product) {
+  return Object.fromEntries(
+    Object.entries({
+      Brand: effectiveProduct.brand,
+      Material: effectiveProduct.attributes.material,
+      Color: effectiveProduct.attributes.color
+    })
+      .map(([name, value]) => [name, typeof value === "string" ? value.trim() : ""] as const)
+      .filter(([, value]) => value.length > 0)
+      .map(([name, value]) => [name, [value]])
+  );
+}
+
 function formatEbayError(
   response: {
     data?: {
@@ -118,13 +131,7 @@ function buildEbayDraft(product: Product, connection?: ChannelConnectionRecord):
     product: {
       title: effectiveProduct.title,
       description: effectiveProduct.description,
-      aspects: Object.fromEntries(
-        Object.entries({
-          Brand: effectiveProduct.brand,
-          Material: effectiveProduct.attributes.material,
-          Color: effectiveProduct.attributes.color
-        }).filter(([, value]) => typeof value === "string" && value.trim().length > 0)
-      )
+      aspects: buildEbayAspects(effectiveProduct)
     }
   };
 
