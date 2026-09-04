@@ -212,6 +212,8 @@ export async function callEbayInventoryApi<TResponse>(
     method: input.method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Accept-Language": input.contentLanguage ?? "en-US",
       "Content-Type": "application/json",
       "Content-Language": input.contentLanguage ?? "en-US"
     },
@@ -243,6 +245,8 @@ export async function callEbayAccountApi<TResponse>(
     method: input.method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
+      Accept: "application/json",
+      "Accept-Language": input.contentLanguage ?? "en-US",
       "Content-Type": "application/json",
       "Content-Language": input.contentLanguage ?? "en-US"
     }
