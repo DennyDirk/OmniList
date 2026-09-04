@@ -24,8 +24,32 @@ interface EbayApiErrorShape {
   }>;
 }
 
+interface EbayOfferSummary {
+  offerId: string;
+  status?: string;
+  listing?: { listingId?: string };
+}
+
 function getMetadataValue(connection: ChannelConnectionRecord | undefined, key: string, fallback = "") {
   return connection?.connection.metadata[key]?.trim() || fallback;
+}
+
+function getOfferStatus(offer: EbayOfferSummary) {
+  return offer.status?.trim().toUpperCase();
+}
+
+function isPublishedOffer(offer: EbayOfferSummary) {
+  return getOfferStatus(offer) === "PUBLISHED" || Boolean(offer.listing?.listingId);
+}
+
+function isPublishableOffer(offer: EbayOfferSummary) {
+  const status = getOfferStatus(offer);
+  return !status || status === "UNPUBLISHED";
+}
+
+function selectReusableOffer(offers: EbayOfferSummary[] = []) {
+  const offersWithId = offers.filter((offer) => offer.offerId);
+  return offersWithId.find(isPublishedOffer) ?? offersWithId.find(isPublishableOffer);
 }
 
 function buildEbayAspects(effectiveProduct: Product) {
@@ -63,7 +87,7 @@ function formatEbayError(
     ].filter(Boolean);
 
     if (details.length > 0) {
-      return details.join(" — ");
+      return details.join(" - ");
     }
   }
 
@@ -139,6 +163,7 @@ function buildEbayDraft(product: Product, connection?: ChannelConnectionRecord):
     sku: effectiveProduct.sku,
     marketplaceId,
     format: "FIXED_PRICE",
+    listingDuration: "GTC",
     availableQuantity: effectiveProduct.quantity,
     categoryId: ebayCategoryId,
     merchantLocationKey,
@@ -219,7 +244,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       const offerPayload = (draft.payload as { offerPayload: Record<string, unknown> }).offerPayload;
 
       const offerSearch = await callEbayInventoryApi<{
-        offers?: Array<{ offerId: string; status?: string; listing?: { listingId?: string } }>;
+        offers?: EbayOfferSummary[];
         errors?: EbayApiErrorShape[];
       }>(env, auth.accessToken, {
         path:
@@ -237,7 +262,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         };
       }
 
-      const existingOffer = offerSearch.data?.offers?.find((offer) => offer.offerId);
+      const existingOffer = selectReusableOffer(offerSearch.data?.offers);
 
       let offerId = existingOffer?.offerId;
 
