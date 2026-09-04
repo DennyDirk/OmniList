@@ -16,6 +16,7 @@ export interface ChannelPublishAdapter {
 }
 
 interface EbayApiErrorShape {
+  errorId?: number | string;
   message?: string;
   longMessage?: string;
   parameters?: Array<{
@@ -27,7 +28,10 @@ interface EbayApiErrorShape {
 interface EbayOfferSummary {
   offerId: string;
   status?: string;
-  listing?: { listingId?: string };
+  listing?: {
+    listingId?: string;
+    listingStatus?: string;
+  };
 }
 
 function getMetadataValue(connection: ChannelConnectionRecord | undefined, key: string, fallback = "") {
@@ -42,14 +46,40 @@ function isPublishedOffer(offer: EbayOfferSummary) {
   return getOfferStatus(offer) === "PUBLISHED" || Boolean(offer.listing?.listingId);
 }
 
+function isEndedOffer(offer: EbayOfferSummary) {
+  const listingStatus = offer.listing?.listingStatus?.trim().toUpperCase();
+  return getOfferStatus(offer) === "ENDED" || listingStatus === "ENDED" || listingStatus === "UNAVAILABLE";
+}
+
 function isPublishableOffer(offer: EbayOfferSummary) {
   const status = getOfferStatus(offer);
-  return !status || status === "UNPUBLISHED";
+  return !isEndedOffer(offer) && (!status || status === "UNPUBLISHED");
 }
 
 function selectReusableOffer(offers: EbayOfferSummary[] = []) {
-  const offersWithId = offers.filter((offer) => offer.offerId);
+  const offersWithId = offers.filter((offer) => offer.offerId && !isEndedOffer(offer));
   return offersWithId.find(isPublishedOffer) ?? offersWithId.find(isPublishableOffer);
+}
+
+function isOfferUnavailableResponse(response: {
+  data?: {
+    errors?: EbayApiErrorShape[];
+  };
+  rawText?: string;
+}) {
+  const errors = response.data?.errors ?? [];
+
+  return (
+    errors.some((error) => {
+      const errorId = error.errorId !== undefined ? String(error.errorId) : "";
+      const errorMessage = [error.message, error.longMessage].filter(Boolean).join(" ");
+      return errorId === "25713" || /this offer is not available/i.test(errorMessage);
+    }) || /this offer is not available/i.test(response.rawText ?? "")
+  );
+}
+
+function addUnavailableOfferHint(message: string) {
+  return `${message} The SKU may be tied to an ended or unavailable eBay offer. Try a fresh SKU or clear the old offer in eBay before publishing again.`;
 }
 
 function buildEbayAspects(effectiveProduct: Product) {
@@ -87,12 +117,12 @@ function formatEbayError(
     ].filter(Boolean);
 
     if (details.length > 0) {
-      return details.join(" - ");
+      return `${fallbackMessage}: ${details.join(" - ")}`;
     }
   }
 
   if (response.rawText?.trim()) {
-    return response.rawText.trim();
+    return `${fallbackMessage}: ${response.rawText.trim()}`;
   }
 
   return fallbackMessage;
@@ -226,11 +256,14 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       }
 
       const auth = await ensureValidEbayAccessToken(env, connection.credentials);
+      const payload = draft.payload as { inventoryItemPayload: unknown; offerPayload: Record<string, unknown> };
+      const offerPayload = payload.offerPayload;
+      const sku = String(offerPayload.sku);
 
       const inventoryResponse = await callEbayInventoryApi<{ errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
-        path: `/sell/inventory/v1/inventory_item/${encodeURIComponent(product.sku)}`,
+        path: `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
         method: "PUT",
-        body: (draft.payload as { inventoryItemPayload: unknown }).inventoryItemPayload
+        body: payload.inventoryItemPayload
       });
 
       if (!inventoryResponse.ok) {
@@ -241,30 +274,31 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         };
       }
 
-      const offerPayload = (draft.payload as { offerPayload: Record<string, unknown> }).offerPayload;
-
       const offerSearch = await callEbayInventoryApi<{
         offers?: EbayOfferSummary[];
         errors?: EbayApiErrorShape[];
       }>(env, auth.accessToken, {
         path:
-          `/sell/inventory/v1/offer?sku=${encodeURIComponent(product.sku)}` +
+          `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}` +
           `&marketplace_id=${encodeURIComponent(String(offerPayload.marketplaceId))}` +
           `&format=${encodeURIComponent(String(offerPayload.format))}`,
         method: "GET"
       });
 
       if (!offerSearch.ok) {
-        return {
-          status: "failed",
-          message: formatEbayError(offerSearch, "eBay offer lookup failed."),
-          updatedCredentials: auth.credentials
-        };
+        if (!isOfferUnavailableResponse(offerSearch)) {
+          return {
+            status: "failed",
+            message: formatEbayError(offerSearch, "eBay offer lookup failed."),
+            updatedCredentials: auth.credentials
+          };
+        }
       }
 
       const existingOffer = selectReusableOffer(offerSearch.data?.offers);
 
       let offerId = existingOffer?.offerId;
+      let shouldCreateOffer = !offerId;
 
       if (offerId) {
         const updateResponse = await callEbayInventoryApi<{ errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
@@ -274,14 +308,19 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         });
 
         if (!updateResponse.ok) {
-          return {
-            status: "failed",
-            message: formatEbayError(updateResponse, "eBay offer update failed."),
-            updatedCredentials: auth.credentials
-          };
+          if (!isOfferUnavailableResponse(updateResponse)) {
+            return {
+              status: "failed",
+              message: formatEbayError(updateResponse, "eBay offer update failed."),
+              updatedCredentials: auth.credentials
+            };
+          }
+
+          offerId = undefined;
+          shouldCreateOffer = true;
         }
 
-        if (existingOffer?.status === "PUBLISHED") {
+        if (offerId && existingOffer && isPublishedOffer(existingOffer)) {
           return {
             status: "published",
             message: existingOffer.listing?.listingId
@@ -290,7 +329,9 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
             updatedCredentials: auth.credentials
           };
         }
-      } else {
+      }
+
+      if (shouldCreateOffer) {
         const createOfferResponse = await callEbayInventoryApi<{
           offerId?: string;
           errors?: EbayApiErrorShape[];
@@ -301,9 +342,11 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         });
 
         if (!createOfferResponse.ok || !createOfferResponse.data?.offerId) {
+          const message = formatEbayError(createOfferResponse, "eBay offer creation failed.");
+
           return {
             status: "failed",
-            message: formatEbayError(createOfferResponse, "eBay offer creation failed."),
+            message: isOfferUnavailableResponse(createOfferResponse) ? addUnavailableOfferHint(message) : message,
             updatedCredentials: auth.credentials
           };
         }
@@ -320,9 +363,28 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       });
 
       if (!publishResponse.ok) {
+        if (isOfferUnavailableResponse(publishResponse)) {
+          const offerDetailsResponse = await callEbayInventoryApi<EbayOfferSummary & { errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
+            path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId!)}`,
+            method: "GET"
+          });
+
+          if (offerDetailsResponse.ok && offerDetailsResponse.data && isPublishedOffer(offerDetailsResponse.data)) {
+            return {
+              status: "published",
+              message: offerDetailsResponse.data.listing?.listingId
+                ? `Updated live eBay listing ${offerDetailsResponse.data.listing.listingId}.`
+                : "Updated live eBay listing.",
+              updatedCredentials: auth.credentials
+            };
+          }
+        }
+
+        const message = formatEbayError(publishResponse, "eBay publish offer failed.");
+
         return {
           status: "failed",
-          message: formatEbayError(publishResponse, "eBay publish offer failed."),
+          message: isOfferUnavailableResponse(publishResponse) ? addUnavailableOfferHint(message) : message,
           updatedCredentials: auth.credentials
         };
       }
