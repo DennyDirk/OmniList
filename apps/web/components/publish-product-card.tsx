@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import type { ChannelConnection, ChannelId } from "@omnilist/shared";
 
 import { dictionaries, formatConnectionStatus, type Locale } from "../lib/i18n";
@@ -29,16 +29,19 @@ export function PublishProductCard({
     Object.fromEntries(
       connections.map((connection) => [
         connection.channelId,
-        connection.status === "connected" && !blockingReasons[connection.channelId]
+        connection.status === "connected" && connection.channelId === "ebay" && !blockingReasons[connection.channelId]
       ])
     )
   );
   const [isPending, startTransition] = useTransition();
+  const [submitting, setSubmitting] = useState(false);
+  const submitLock = useRef(false);
 
   const connectedChannels = connections.filter((connection) => connection.status === "connected");
-  const selectableConnectedChannels = connectedChannels.filter((connection) => !blockingReasons[connection.channelId]);
+  const selectableConnectedChannels = connectedChannels.filter((connection) => connection.channelId === "ebay" && !blockingReasons[connection.channelId]);
 
   async function handlePublish() {
+    if (submitLock.current) return;
     if (!apiBaseUrl) {
       showFlash({
         tone: "error",
@@ -62,6 +65,9 @@ export function PublishProductCard({
       return;
     }
 
+    submitLock.current = true;
+    setSubmitting(true);
+    try {
     const response = await fetch(`${apiBaseUrl}/products/${productId}/publish`, {
       method: "POST",
       credentials: "include",
@@ -91,9 +97,12 @@ export function PublishProductCard({
       router.refresh();
     });
 
-    setTimeout(() => {
-      router.refresh();
-    }, 2200);
+    } catch {
+      showFlash({ tone: "error", message: dictionary.publishCard.enqueueFailed });
+    } finally {
+      submitLock.current = false;
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -109,7 +118,7 @@ export function PublishProductCard({
           <label className="list-item checkbox-row" key={connection.id}>
             <input
               checked={Boolean(selected[connection.channelId])}
-              disabled={connection.status !== "connected" || Boolean(blockingReasons[connection.channelId])}
+              disabled={connection.status !== "connected" || connection.channelId !== "ebay" || Boolean(blockingReasons[connection.channelId])}
               onChange={(event) =>
                 setSelected((current) => ({
                   ...current,
@@ -121,6 +130,7 @@ export function PublishProductCard({
             <span>
               <div>
                 {connection.channelId}{" "}
+                {connection.channelId !== "ebay" ? "(coming soon) " : ""}
                 {connection.status !== "connected" ? `(${formatConnectionStatus(dictionary, connection.status)})` : ""}
               </div>
               {blockingReasons[connection.channelId] ? (
@@ -134,7 +144,7 @@ export function PublishProductCard({
       </div>
 
       <div className="editor-actions">
-        <button className="button-primary" disabled={isPending} onClick={handlePublish} type="button">
+        <button className="button-primary" disabled={isPending || submitting} onClick={handlePublish} type="button">
           {isPending ? dictionary.common.refreshing : dictionary.publishCard.publishToSelected}
         </button>
       </div>

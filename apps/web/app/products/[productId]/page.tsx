@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 
 import { InventoryCard } from "../../../components/inventory-card";
 import { PublishProductCard } from "../../../components/publish-product-card";
+import { PublishJobRefresh } from "../../../components/publish-job-refresh";
 import { requireAuthSession } from "../../../lib/auth";
 import {
   getChannelConnections,
@@ -70,6 +71,7 @@ export default async function ProductWorkspacePage({
 
   return (
     <main className="shell">
+      <PublishJobRefresh active={publishJobs.some(job => job.status === "queued" || job.status === "processing")} locale={locale} />
       <section className="hero">
         <div className="hero-actions">
           <Link className="pill" href="/">
@@ -207,7 +209,7 @@ export default async function ProductWorkspacePage({
                 <strong>3. Product readiness</strong>
                 <div>
                   {ebayReadiness?.status === "ready"
-                    ? "This product is ready for eBay validation rules."
+                    ? "Basic checks passed. eBay category requirements are checked again before publishing."
                     : "Fix the blocking product issues in the eBay readiness card above."}
                 </div>
               </div>

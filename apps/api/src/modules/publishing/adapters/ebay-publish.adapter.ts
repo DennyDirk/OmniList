@@ -1,6 +1,8 @@
 import {
   getBestCategoryLabel,
   getEffectiveProductForChannel,
+  buildEbayAspects,
+  validateEbayCategory,
   type ChannelDraftPreview,
   type Product
 } from "@omnilist/shared";
@@ -9,6 +11,7 @@ import type { ApiEnv } from "../../../config/env";
 import type { ChannelConnectionRecord } from "../../channels/channel-connections.repository";
 import type { ChannelPublishExecutionResult } from "./channel-publish-registry";
 import { callEbayInventoryApi, ensureValidEbayAccessToken } from "../../channels/adapters/ebay-client";
+import { EbayPreparationError, getEbayCategoryRequirements } from "../../channels/adapters/ebay-category";
 
 export interface ChannelPublishAdapter {
   buildDraft(product: Product, connection?: ChannelConnectionRecord): ChannelDraftPreview;
@@ -43,7 +46,7 @@ function getOfferStatus(offer: EbayOfferSummary) {
 }
 
 function isPublishedOffer(offer: EbayOfferSummary) {
-  return getOfferStatus(offer) === "PUBLISHED" || Boolean(offer.listing?.listingId);
+  return !isEndedOffer(offer) && getOfferStatus(offer) === "PUBLISHED" && Boolean(offer.listing?.listingId);
 }
 
 function isEndedOffer(offer: EbayOfferSummary) {
@@ -79,20 +82,7 @@ function isOfferUnavailableResponse(response: {
 }
 
 function addUnavailableOfferHint(message: string) {
-  return `${message} The SKU may be tied to an ended or unavailable eBay offer. Try a fresh SKU or clear the old offer in eBay before publishing again.`;
-}
-
-function buildEbayAspects(effectiveProduct: Product) {
-  return Object.fromEntries(
-    Object.entries({
-      Brand: effectiveProduct.brand,
-      Material: effectiveProduct.attributes.material,
-      Color: effectiveProduct.attributes.color
-    })
-      .map(([name, value]) => [name, typeof value === "string" ? value.trim() : ""] as const)
-      .filter(([, value]) => value.length > 0)
-      .map(([name, value]) => [name, [value]])
-  );
+  return `${message} Check this SKU and its offer in eBay before retrying. Do not change the SKU to bypass this error; that can create a duplicate listing.`;
 }
 
 function formatEbayError(
@@ -108,21 +98,20 @@ function formatEbayError(
 
   if (error) {
     const details = [
-      error.message?.trim(),
-      error.longMessage?.trim(),
+      error.longMessage?.trim() || error.message?.trim(),
       error.parameters
-        ?.filter((parameter) => parameter.name?.trim() && parameter.value?.trim())
+        ?.filter((parameter) => parameter.name?.trim() && !/^\d+$/.test(parameter.name) && parameter.value?.trim())
         .map((parameter) => `${parameter.name}: ${parameter.value}`)
         .join(", ")
     ].filter(Boolean);
 
     if (details.length > 0) {
-      return `${fallbackMessage}: ${details.join(" - ")}`;
+      return `${fallbackMessage.replace(/[.:]+$/, "")} [${error.errorId ?? "unknown"}]: ${details.join("; ").slice(0, 700)}`;
     }
   }
 
   if (response.rawText?.trim()) {
-    return `${fallbackMessage}: ${response.rawText.trim()}`;
+    return `${fallbackMessage} eBay returned an unreadable response. Check this SKU on eBay before retrying.`;
   }
 
   return fallbackMessage;
@@ -136,9 +125,18 @@ function buildEbayDraft(product: Product, connection?: ChannelConnectionRecord):
   const fulfillmentPolicyId = getMetadataValue(connection, "fulfillmentPolicyId");
   const paymentPolicyId = getMetadataValue(connection, "paymentPolicyId");
   const returnPolicyId = getMetadataValue(connection, "returnPolicyId");
-  const condition = getMetadataValue(connection, "condition", "NEW");
+  const condition = product.channelOverrides.ebay?.condition;
   const currency = getMetadataValue(connection, "currency", "USD");
   const missingConfiguration: string[] = [];
+
+  if (marketplaceId !== "EBAY_US" || currency !== "USD") {
+    missingConfiguration.push("The first eBay publishing release supports EBAY_US with USD only.");
+  }
+  if (!condition) missingConfiguration.push("Choose the item's condition in the product's eBay settings, not in channel settings.");
+  if (effectiveProduct.title.length > 80) missingConfiguration.push("eBay titles must be at most 80 characters.");
+  if (effectiveProduct.sku.length > 50) missingConfiguration.push("eBay SKUs must be at most 50 characters.");
+  if (effectiveProduct.basePrice <= 0) missingConfiguration.push("Set a price above zero before publishing.");
+  if (!effectiveProduct.images.length) missingConfiguration.push("Add at least one product photo.");
 
   if (!ebayCategoryId) {
     missingConfiguration.push("Set a numeric eBay category ID in the product's eBay override settings.");
@@ -181,8 +179,9 @@ function buildEbayDraft(product: Product, connection?: ChannelConnectionRecord):
       }
     },
     condition,
-    imageUrls: effectiveProduct.images.map((image) => image.url),
+    conditionDescription: product.channelOverrides.ebay?.conditionDescription || undefined,
     product: {
+      imageUrls: effectiveProduct.images.map((image) => image.url),
       title: effectiveProduct.title,
       description: effectiveProduct.description,
       aspects: buildEbayAspects(effectiveProduct)
@@ -259,6 +258,18 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       const payload = draft.payload as { inventoryItemPayload: unknown; offerPayload: Record<string, unknown> };
       const offerPayload = payload.offerPayload;
       const sku = String(offerPayload.sku);
+
+      try {
+        const requirements = await getEbayCategoryRequirements(env, auth.accessToken, String(offerPayload.marketplaceId), String(offerPayload.categoryId));
+        const issues = validateEbayCategory(requirements, product.channelOverrides.ebay?.condition, buildEbayAspects(product));
+        if (issues.length) return { status: "failed", message: issues.join(" "), updatedCredentials: auth.credentials };
+      } catch (error) {
+        return {
+          status: "failed",
+          message: error instanceof EbayPreparationError ? error.message : "Could not load eBay category requirements. No listing was sent. Check the connection and try again.",
+          updatedCredentials: auth.credentials
+        };
+      }
 
       const inventoryResponse = await callEbayInventoryApi<{ errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
         path: `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
@@ -390,10 +401,10 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       }
 
       return {
-        status: "published",
+        status: publishResponse.data?.listingId ? "published" : "failed",
         message: publishResponse.data?.listingId
           ? `Published to eBay listing ${publishResponse.data.listingId}.`
-          : "Published to eBay successfully.",
+          : "eBay did not confirm a listing ID. Check this SKU on eBay before retrying.",
         updatedCredentials: auth.credentials
       };
     }
