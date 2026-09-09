@@ -92,6 +92,7 @@ async function processTargets(
   const registry = createChannelPublishRegistry(env);
 
   return Promise.all(targets.map(async (target) => {
+    try {
     const readiness = validateProductForChannel(product, target.channelId);
     const connectionRecord = connectionsByChannel.get(target.channelId);
     const connection = connectionRecord?.connection;
@@ -112,7 +113,7 @@ async function processTargets(
         status: "failed",
         readinessScore: readiness.score,
         issueCount: readiness.issues.length,
-        message: "Blocking validation issues must be fixed before publishing."
+        message: readiness.issues.filter(issue => issue.severity === "blocking").map(issue => issue.message).join(" ")
       };
     }
 
@@ -138,11 +139,14 @@ async function processTargets(
 
     return {
       ...target,
-      status: "published",
+      status: "failed",
       readinessScore: readiness.score,
       issueCount: readiness.issues.length,
-        message: "Listing accepted by the current mock channel adapter."
+        message: "Publishing to this channel is not implemented yet. No listing was created."
       };
+    } catch {
+      return { ...target, status: "failed", message: "Publishing could not be confirmed because a service request failed. Check eBay for this SKU before retrying." };
+    }
   }));
 }
 
@@ -165,7 +169,7 @@ export function createPublishingService(
       connections: ChannelConnection[];
       connectionRecords: ChannelConnectionRecord[];
     }) {
-      const queuedTargets = toQueuedTargets(input.product, input.channelIds);
+      const queuedTargets = toQueuedTargets(input.product, [...new Set(input.channelIds)]);
 
       const job = await repository.createJob({
         workspaceId: input.workspaceId,
@@ -176,14 +180,12 @@ export function createPublishingService(
       });
 
       void (async () => {
-        await new Promise((resolve) => setTimeout(resolve, 900));
         const processingTargets = job.targets.map((target) => ({
           ...target,
           status: "processing" as const
         }));
         await repository.updateJob(input.workspaceId, job.id, "processing", processingTargets);
 
-        await new Promise((resolve) => setTimeout(resolve, 900));
         const finalTargets = await processTargets(
           env,
           channelConnectionRepository,
@@ -197,7 +199,16 @@ export function createPublishingService(
           calculateFinalJobStatus(finalTargets),
           finalTargets
         );
-      })();
+      })().catch(async () => {
+        const targets = job.targets.map(target => ({
+          ...target,
+          status: "failed" as const,
+          message: "The publishing task was interrupted. Check the listing on eBay before retrying."
+        }));
+        await repository.updateJob(input.workspaceId, job.id, "failed", targets);
+      }).catch(() => {
+        console.error("Could not persist publish job outcome", { jobId: job.id });
+      });
 
       return job;
     },

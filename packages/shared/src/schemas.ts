@@ -87,7 +87,10 @@ export const productChannelOverrideSchema = z.object({
   title: z.string().min(3).optional(),
   description: z.string().min(10).optional(),
   price: z.number().nonnegative().optional(),
-  categoryId: z.string().min(1).optional()
+  categoryId: z.string().trim().min(1).optional(),
+  condition: z.string().trim().min(1).optional(),
+  conditionDescription: z.string().trim().max(1000).optional(),
+  aspects: z.record(z.string().trim().min(1).max(65), z.array(z.string().trim().min(1).max(1000)).max(30)).optional()
 });
 
 export const productChannelOverridesSchema = z

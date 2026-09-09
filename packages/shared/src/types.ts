@@ -79,6 +79,9 @@ export interface ProductChannelOverride {
   description?: string;
   price?: number;
   categoryId?: string;
+  condition?: string;
+  conditionDescription?: string;
+  aspects?: Record<string, string[]>;
 }
 
 export interface Product {

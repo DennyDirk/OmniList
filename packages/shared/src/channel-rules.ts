@@ -26,7 +26,7 @@ export const channels: Channel[] = [
 
 export const requiredFieldsByChannel: Record<ChannelId, string[]> = {
   shopify: ["title", "description", "basePrice", "quantity", "images"],
-  ebay: ["title", "description", "basePrice", "quantity", "images", "categoryId", "brand"],
+  ebay: ["title", "description", "basePrice", "quantity", "images"],
   etsy: ["title", "description", "basePrice", "quantity", "images", "categoryId"]
 };
 
@@ -35,4 +35,3 @@ export const suggestedFieldsByChannel: Record<ChannelId, string[]> = {
   ebay: ["material", "color"],
   etsy: ["material", "primary_color"]
 };
-

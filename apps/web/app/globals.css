@@ -412,6 +412,8 @@ a {
 
 .bulk-card {
   display: grid;
+  align-self: start;
+  align-content: start;
   gap: 18px;
 }
 

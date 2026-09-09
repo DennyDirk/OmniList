@@ -3,6 +3,7 @@ import Link from "next/link";
 import { redirect } from "next/navigation";
 
 import { BulkPublishCard } from "../components/bulk-publish-card";
+import { PublishJobRefresh } from "../components/publish-job-refresh";
 import { LogoutButton } from "../components/logout-button";
 import { requireAuthSession } from "../lib/auth";
 import {
@@ -53,6 +54,7 @@ export default async function DashboardPage() {
 
   return (
     <main className="shell">
+      <PublishJobRefresh active={publishJobs.some(job => job.status === "queued" || job.status === "processing")} locale={locale} />
       <section className="hero">
         <span className="eyebrow">{dictionary.dashboard.eyebrow}</span>
         <h1>{dictionary.dashboard.title}</h1>

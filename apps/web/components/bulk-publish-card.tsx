@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useMemo, useState, useTransition } from "react";
+import { useRef, useState, useTransition } from "react";
 import type { ChannelConnection, ChannelId, Product } from "@omnilist/shared";
 
 import { getReadinessForAllChannels } from "../lib/readiness";
@@ -18,16 +18,17 @@ export function BulkPublishCard({ apiBaseUrl, products, connections, locale }: B
   const router = useRouter();
   const dictionary = dictionaries[locale];
   const [isPending, startTransition] = useTransition();
+  const [submitting, setSubmitting] = useState(false);
+  const submitLock = useRef(false);
   const [error, setError] = useState("");
   const [success, setSuccess] = useState("");
   const [selectedProducts, setSelectedProducts] = useState<Record<string, boolean>>({});
   const [selectedChannels, setSelectedChannels] = useState<Record<string, boolean>>(
-    Object.fromEntries(connections.filter((item) => item.status === "connected").map((item) => [item.channelId, true]))
+    Object.fromEntries(connections.filter((item) => item.status === "connected" && item.channelId === "ebay").map((item) => [item.channelId, true]))
   );
 
-  const connectedChannels = connections.filter((item) => item.status === "connected");
-  const productRows = useMemo(
-    () =>
+  const connectedChannels = connections.filter((item) => item.status === "connected" && item.channelId === "ebay");
+  const productRows =
       products.map((product) => {
         const readiness = getReadinessForAllChannels(product);
         const readyConnectedCount = readiness.filter(
@@ -40,11 +41,10 @@ export function BulkPublishCard({ apiBaseUrl, products, connections, locale }: B
           product,
           readyConnectedCount
         };
-      }),
-    [connectedChannels, products]
-  );
+      });
 
   async function handleQueue() {
+    if (submitLock.current) return;
     setError("");
     setSuccess("");
 
@@ -71,6 +71,9 @@ export function BulkPublishCard({ apiBaseUrl, products, connections, locale }: B
       return;
     }
 
+    submitLock.current = true;
+    setSubmitting(true);
+    try {
     const response = await fetch(`${apiBaseUrl}/publish-jobs/bulk`, {
       method: "POST",
       credentials: "include",
@@ -103,6 +106,12 @@ export function BulkPublishCard({ apiBaseUrl, products, connections, locale }: B
     startTransition(() => {
       router.refresh();
     });
+    } catch {
+      setError("Could not confirm the request. Refresh the job list before retrying.");
+    } finally {
+      submitLock.current = false;
+      setSubmitting(false);
+    }
   }
 
   return (
@@ -122,7 +131,7 @@ export function BulkPublishCard({ apiBaseUrl, products, connections, locale }: B
             <label className="list-item checkbox-row" key={connection.id}>
               <input
                 checked={Boolean(selectedChannels[connection.channelId])}
-                disabled={connection.status !== "connected"}
+                disabled={connection.status !== "connected" || connection.channelId !== "ebay"}
                 onChange={(event) =>
                   setSelectedChannels((current) => ({
                     ...current,
@@ -133,6 +142,7 @@ export function BulkPublishCard({ apiBaseUrl, products, connections, locale }: B
               />
               <span>
                 {connection.channelId}
+                {connection.channelId !== "ebay" ? " (coming soon)" : ""}
                 {connection.status !== "connected" ? ` (${connection.status})` : ""}
               </span>
             </label>
@@ -187,7 +197,7 @@ export function BulkPublishCard({ apiBaseUrl, products, connections, locale }: B
       {success ? <div className="banner success">{success}</div> : null}
 
       <div className="editor-actions">
-        <button className="button-primary" disabled={isPending} onClick={() => void handleQueue()} type="button">
+        <button className="button-primary" disabled={isPending || submitting} onClick={() => void handleQueue()} type="button">
           {isPending ? dictionary.common.refreshing : "Queue selected products"}
         </button>
       </div>

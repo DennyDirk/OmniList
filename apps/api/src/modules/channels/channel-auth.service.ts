@@ -131,14 +131,14 @@ export function createChannelAuthService(repository: ChannelConnectionRepository
     }) {
       const verifiedState = verifyConnectState(secret, input.returnedState);
       const decodedState = decodeConnectState(input.stateCookieValue);
-      const workspaceId = verifiedState?.workspaceId ?? decodedState?.workspaceId;
-      const effectiveChannelId = verifiedState?.channelId ?? decodedState?.channelId;
-      const stateMatchesCookie = decodedState?.state === input.returnedState;
+      const workspaceId = verifiedState?.workspaceId;
+      const effectiveChannelId = verifiedState?.channelId;
 
       if (
         !workspaceId ||
         effectiveChannelId !== input.channelId ||
-        (!verifiedState && !stateMatchesCookie)
+        !verifiedState ||
+        (decodedState !== undefined && decodedState.state !== input.returnedState)
       ) {
         throw new Error("INVALID_CHANNEL_CONNECT_STATE");
       }

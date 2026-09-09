@@ -16,6 +16,7 @@
     "build:web": "npm run build --workspace @omnilist/shared && npm run build --workspace @omnilist/web",
     "build:api": "npm run build --workspace @omnilist/shared && npm run build --workspace @omnilist/api",
     "typecheck": "npm run typecheck --workspaces",
+    "test": "npm run build --workspace @omnilist/shared && tsx --test scripts/*.test.ts",
     "build": "npm run build --workspaces"
   }
 }

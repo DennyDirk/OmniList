@@ -23,7 +23,8 @@ import { createChannelConnectionRepository } from "./modules/channels/channel-co
 import { createChannelConnectionsService } from "./modules/channels/channel-connections.service";
 import { CHANNEL_CONNECT_STATE_COOKIE_NAME, createChannelAuthService } from "./modules/channels/channel-auth.service";
 import { listChannels } from "./modules/channels/channels.service";
-import { getEbaySellerSetupOptions } from "./modules/channels/adapters/ebay-client";
+import { ensureValidEbayAccessToken, getEbaySellerSetupOptions } from "./modules/channels/adapters/ebay-client";
+import { EbayPreparationError, getEbayCategoryRequirements } from "./modules/channels/adapters/ebay-category";
 import { createMediaService } from "./modules/media/media.service";
 import { createInventoryRepository } from "./modules/inventory/inventory.repository";
 import { createInventoryService } from "./modules/inventory/inventory.service";
@@ -74,6 +75,25 @@ export async function buildApp() {
 
   await app.register(cookie, {
     secret: "omnilist-dev-cookie-secret"
+  });
+
+  app.get("/channel-connections/ebay/category-requirements", async (request, reply) => {
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    const categoryId = (request.query as { categoryId?: unknown }).categoryId;
+    if (typeof categoryId !== "string" || !/^\d{1,12}$/.test(categoryId)) {
+      return reply.code(400).send({ message: "Enter a numeric eBay leaf category ID." });
+    }
+    const record = await channelConnectionRepository.getConnectionRecord(session.workspace.id, "ebay");
+    if (!record || record.connection.status !== "connected") return reply.code(409).send({ message: "Connect eBay before checking the category." });
+    try {
+      const auth = await ensureValidEbayAccessToken(env, record.credentials);
+      await channelConnectionRepository.setCredentials(session.workspace.id, "ebay", auth.credentials);
+      const item = await getEbayCategoryRequirements(env, auth.accessToken, record.connection.metadata.marketplaceId?.trim() || "EBAY_US", categoryId);
+      return reply.header("Cache-Control", "private, no-store").send({ item });
+    } catch (error) {
+      return reply.code(502).send({ message: error instanceof EbayPreparationError ? error.message : "Could not check the eBay category. Check your eBay connection and try again." });
+    }
   });
 
   async function getRequiredSession(request: FastifyRequest, reply: FastifyReply) {

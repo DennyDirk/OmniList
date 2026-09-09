@@ -46,10 +46,6 @@ function parseJsonSafely<TResponse>(text: string) {
   }
 }
 
-function looksLikeIgnorableSandboxSetupError(message: string) {
-  return /input error|invalid \.|system error\.?/i.test(message);
-}
-
 export function hasRequiredEbayScopes(credentials: Record<string, string>, requiredScopes: string[]) {
   const grantedScopes = new Set(
     (credentials.scope ?? "")
@@ -111,6 +107,7 @@ export async function exchangeEbayAuthorizationCode(env: ApiEnv, code: string) {
   });
 
   const response = await fetch(`${baseUrls.apiBaseUrl}/identity/v1/oauth2/token`, {
+    signal: AbortSignal.timeout(15_000),
     method: "POST",
     headers: {
       Authorization: getBasicAuthorizationHeader(env),
@@ -142,6 +139,7 @@ export async function refreshEbayUserAccessToken(env: ApiEnv, credentials: Recor
   });
 
   const response = await fetch(`${baseUrls.apiBaseUrl}/identity/v1/oauth2/token`, {
+    signal: AbortSignal.timeout(15_000),
     method: "POST",
     headers: {
       Authorization: getBasicAuthorizationHeader(env),
@@ -181,6 +179,7 @@ export async function ensureValidEbayAccessToken(env: ApiEnv, credentials: Recor
 export async function getEbayUserProfile(env: ApiEnv, accessToken: string) {
   const baseUrls = getEbayBaseUrls(env.ebayEnvironment);
   const response = await fetch(`${baseUrls.apiBaseUrl}/commerce/identity/v1/user/`, {
+    signal: AbortSignal.timeout(15_000),
     headers: {
       Authorization: `Bearer ${accessToken}`,
       "Content-Type": "application/json"
@@ -209,6 +208,7 @@ export async function callEbayInventoryApi<TResponse>(
 ) {
   const baseUrls = getEbayBaseUrls(env.ebayEnvironment);
   const response = await fetch(`${baseUrls.apiBaseUrl}${input.path}`, {
+    signal: AbortSignal.timeout(15_000),
     method: input.method,
     headers: {
       Authorization: `Bearer ${accessToken}`,
@@ -231,36 +231,24 @@ export async function callEbayInventoryApi<TResponse>(
   };
 }
 
-export async function callEbayAccountApi<TResponse>(
-  env: ApiEnv,
-  accessToken: string,
-  input: {
-    path: string;
-    method: "GET";
-    contentLanguage?: string;
-  }
-) {
-  const baseUrls = getEbayBaseUrls(env.ebayEnvironment);
-  const response = await fetch(`${baseUrls.apiBaseUrl}${input.path}`, {
-    method: input.method,
-    headers: {
-      Authorization: `Bearer ${accessToken}`,
-      Accept: "application/json",
-      "Accept-Language": input.contentLanguage ?? "en-US",
-      "Content-Type": "application/json",
-      "Content-Language": input.contentLanguage ?? "en-US"
-    }
+export const callEbayAccountApi = callEbayInventoryApi;
+
+let applicationToken: { key: string; token: string; expiresAt: number } | undefined;
+
+export async function getEbayApplicationToken(env: ApiEnv) {
+  const key = `${env.ebayEnvironment}:${env.ebayClientId}`;
+  if (applicationToken?.key === key && applicationToken.expiresAt > Date.now() + 60_000) return applicationToken.token;
+  const response = await fetch(`${getEbayBaseUrls(env.ebayEnvironment).apiBaseUrl}/identity/v1/oauth2/token`, {
+    method: "POST",
+    signal: AbortSignal.timeout(15_000),
+    headers: { Authorization: getBasicAuthorizationHeader(env), "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({ grant_type: "client_credentials", scope: "https://api.ebay.com/oauth/api_scope" })
   });
-
-  const text = await response.text();
-  const data = parseJsonSafely<TResponse>(text);
-
-  return {
-    ok: response.ok,
-    status: response.status,
-    data,
-    rawText: text
-  };
+  if (!response.ok) throw new Error("EBAY_APPLICATION_TOKEN_FAILED");
+  const token = await response.json() as EbayUserTokenResponse;
+  if (!token.access_token || !Number.isFinite(token.expires_in)) throw new Error("EBAY_APPLICATION_TOKEN_FAILED");
+  applicationToken = { key, token: token.access_token, expiresAt: Date.now() + token.expires_in * 1000 };
+  return token.access_token;
 }
 
 function mapPolicyLabel(policy: {
@@ -356,40 +344,19 @@ export async function getEbaySellerSetupOptions(
     fulfillmentPoliciesResponse.data?.errors?.[0]?.message || fulfillmentPoliciesResponse.rawText || "";
   const paymentErrorMessage = paymentPoliciesResponse.data?.errors?.[0]?.message || paymentPoliciesResponse.rawText || "";
   const returnErrorMessage = returnPoliciesResponse.data?.errors?.[0]?.message || returnPoliciesResponse.rawText || "";
-  const canIgnoreLocationFailure = !locationsResponse.ok && looksLikeIgnorableSandboxSetupError(locationErrorMessage);
-  const canIgnoreFulfillmentFailure =
-    !fulfillmentPoliciesResponse.ok && looksLikeIgnorableSandboxSetupError(fulfillmentErrorMessage);
-  const canIgnorePaymentFailure = !paymentPoliciesResponse.ok && looksLikeIgnorableSandboxSetupError(paymentErrorMessage);
-  const canIgnoreReturnFailure = !returnPoliciesResponse.ok && looksLikeIgnorableSandboxSetupError(returnErrorMessage);
-
-  if (canIgnoreLocationFailure) {
-    warnings.push("eBay did not return inventory locations for this sandbox account. Add merchantLocationKey manually or create an inventory location in eBay.");
-  } else if (!locationsResponse.ok) {
-    throw new Error(locationErrorMessage || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
-  }
-
-  if (canIgnoreFulfillmentFailure) {
-    warnings.push("eBay did not return fulfillment policies for this sandbox account. Enter fulfillmentPolicyId manually if needed.");
-  } else if (!fulfillmentPoliciesResponse.ok) {
-    throw new Error(fulfillmentErrorMessage || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
-  }
-
-  if (canIgnorePaymentFailure) {
-    warnings.push("eBay did not return payment policies for this sandbox account. Enter paymentPolicyId manually if needed.");
-  } else if (!paymentPoliciesResponse.ok) {
-    throw new Error(paymentErrorMessage || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
-  }
-
-  if (canIgnoreReturnFailure) {
-    warnings.push("eBay did not return return policies for this sandbox account. Enter returnPolicyId manually if needed.");
-  } else if (!returnPoliciesResponse.ok) {
-    throw new Error(returnErrorMessage || "EBAY_SETUP_OPTIONS_FETCH_FAILED");
+  for (const [label, response, message] of [
+    ["inventory locations", locationsResponse, locationErrorMessage],
+    ["fulfillment policies", fulfillmentPoliciesResponse, fulfillmentErrorMessage],
+    ["payment policies", paymentPoliciesResponse, paymentErrorMessage],
+    ["return policies", returnPoliciesResponse, returnErrorMessage]
+  ] as const) {
+    if (!response.ok) throw new Error(`Could not load eBay ${label} (HTTP ${response.status}). ${message.slice(0, 300)} Try again later; saved settings have not changed.`);
   }
 
   return {
     options: {
       marketplaceId,
-      merchantLocations: ((canIgnoreLocationFailure ? [] : locationsResponse.data?.locations) ?? [])
+      merchantLocations: (locationsResponse.data?.locations ?? [])
         .filter((location): location is NonNullable<typeof location> & { merchantLocationKey: string } => Boolean(location?.merchantLocationKey))
         .map((location) => {
           const address = location.location?.address;
@@ -400,19 +367,19 @@ export async function getEbaySellerSetupOptions(
             detail: addressLabel || undefined
           };
         }),
-      fulfillmentPolicies: ((canIgnoreFulfillmentFailure ? [] : fulfillmentPoliciesResponse.data?.fulfillmentPolicies) ?? [])
+      fulfillmentPolicies: (fulfillmentPoliciesResponse.data?.fulfillmentPolicies ?? [])
         .filter((policy): policy is NonNullable<typeof policy> & { fulfillmentPolicyId: string } => Boolean(policy?.fulfillmentPolicyId))
         .map((policy) => ({
           id: policy.fulfillmentPolicyId,
           ...mapPolicyLabel(policy)
         })),
-      paymentPolicies: ((canIgnorePaymentFailure ? [] : paymentPoliciesResponse.data?.paymentPolicies) ?? [])
+      paymentPolicies: (paymentPoliciesResponse.data?.paymentPolicies ?? [])
         .filter((policy): policy is NonNullable<typeof policy> & { paymentPolicyId: string } => Boolean(policy?.paymentPolicyId))
         .map((policy) => ({
           id: policy.paymentPolicyId,
           ...mapPolicyLabel(policy)
         })),
-      returnPolicies: ((canIgnoreReturnFailure ? [] : returnPoliciesResponse.data?.returnPolicies) ?? [])
+      returnPolicies: (returnPoliciesResponse.data?.returnPolicies ?? [])
         .filter((policy): policy is NonNullable<typeof policy> & { returnPolicyId: string } => Boolean(policy?.returnPolicyId))
         .map((policy) => ({
           id: policy.returnPolicyId,

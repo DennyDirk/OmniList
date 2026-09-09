@@ -6,6 +6,7 @@ import { channels, getMappedCategoryLabel, productUpsertInputSchema, suggestCate
 
 import { dictionaries, type Locale } from "../lib/i18n";
 import { useFlash } from "./flash-provider";
+import { EbayProductFields, type EbayProductDetails } from "./ebay-product-fields";
 
 interface ProductEditorProps {
   apiBaseUrl: string;
@@ -164,6 +165,11 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
   const [fieldErrors, setFieldErrors] = useState<FormFieldErrors>({});
   const [variantErrors, setVariantErrors] = useState<VariantFieldErrors[]>([]);
   const [channelOverrideErrors, setChannelOverrideErrors] = useState<ChannelOverrideErrors>({});
+  const [ebayDetails, setEbayDetails] = useState<EbayProductDetails>(() => ({
+    condition: initialProduct?.channelOverrides.ebay?.condition ?? "",
+    conditionDescription: initialProduct?.channelOverrides.ebay?.conditionDescription ?? "",
+    aspects: initialProduct?.channelOverrides.ebay?.aspects ?? {}
+  }));
 
   const isEditing = Boolean(initialProduct);
 
@@ -252,6 +258,7 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
       })),
       attributes: Object.fromEntries(
         Object.entries({
+          ...initialProduct?.attributes,
           material: form.material,
           color: form.color,
           primary_color: form.primaryColor
@@ -278,6 +285,11 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
           const override = channelOverrides[channel.id];
           const parsedPrice = override.price.trim().length > 0 ? parseDecimalInput(override.price) : undefined;
           const nextOverride = {
+            ...(channel.id === "ebay" ? {
+              ...ebayDetails,
+              condition: ebayDetails.condition || undefined,
+              aspects: Object.fromEntries(Object.entries(ebayDetails.aspects).map(([key, values]) => [key, values.map(value => value.trim()).filter(Boolean)]))
+            } : {}),
             title: override.title.trim() || undefined,
             description: override.description.trim() || undefined,
             price: parsedPrice,
@@ -287,7 +299,8 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
           return nextOverride.title ||
             nextOverride.description ||
             nextOverride.price !== undefined ||
-            nextOverride.categoryId
+            nextOverride.categoryId ||
+            (channel.id === "ebay" && (ebayDetails.condition || Object.keys(ebayDetails.aspects).length))
             ? [[channel.id, nextOverride]]
             : [];
         })
@@ -636,16 +649,15 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: ProductEdi
                   </label>
 
                   {channel.id === "ebay" ? (
-                    <label className="field">
-                      <span>{dictionary.productEditor.overrideCategoryId}</span>
-                      <input
-                        inputMode="numeric"
-                        value={channelOverrides[channel.id].categoryId}
-                        onChange={(event) => updateChannelOverride(channel.id, "categoryId", event.target.value)}
-                        placeholder={dictionary.productEditor.overrideCategoryIdHint}
-                      />
-                      <span className="field-hint">{dictionary.productEditor.overrideCategoryIdHelp}</span>
-                    </label>
+                    <EbayProductFields
+                      apiBaseUrl={apiBaseUrl}
+                      categoryId={channelOverrides.ebay.categoryId}
+                      onCategoryChange={value => updateChannelOverride("ebay", "categoryId", value)}
+                      value={ebayDetails}
+                      onChange={setEbayDetails}
+                      baseAspects={Object.fromEntries(Object.entries({ Brand: form.brand, Material: form.material, Color: form.color }).filter(([, value]) => value.trim()).map(([key, value]) => [key, [value.trim()]]))}
+                      locale={locale}
+                    />
                   ) : null}
 
                   <label className="field field-full">
