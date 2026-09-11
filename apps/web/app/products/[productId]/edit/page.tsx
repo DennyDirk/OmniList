@@ -21,16 +21,15 @@ export default async function EditProductPage({
   }
 
   return (
-    <main className="shell">
-      <section className="hero">
+    <main className="shell listing-shell">
+      <section className="listing-header">
         <Link className="pill" href={`/products/${product.id}`}>
           {dictionary.common.backToWorkspace}
         </Link>
         <h1>{dictionary.editProductPage.title}</h1>
-        <p>{dictionary.editProductPage.description}</p>
       </section>
 
-      <section className="card" style={{ marginTop: 24 }}>
+      <section className="listing-editor-wrap">
         <ProductEditor apiBaseUrl={getClientApiBaseUrl()} initialProduct={product} locale={locale} />
       </section>
     </main>

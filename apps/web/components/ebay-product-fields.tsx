@@ -1,8 +1,10 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { validateEbayCategory, type EbayCategoryRequirements } from "@omnilist/shared";
 import type { Locale } from "../lib/i18n";
+import { publishCopy } from "../lib/publish-copy";
+import { EbayCategoryPicker } from "./ebay-category-picker";
 
 export interface EbayProductDetails {
   condition: string;
@@ -26,6 +28,9 @@ export function EbayProductFields({ apiBaseUrl, categoryId, onCategoryChange, va
   locale: Locale;
 }) {
   const text = labels[locale];
+  const copy = publishCopy[locale];
+  const [choosing, setChoosing] = useState(!categoryId);
+  const [revision, setRevision] = useState(0);
   const [requirements, setRequirements] = useState<EbayCategoryRequirements>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
@@ -33,21 +38,33 @@ export function EbayProductFields({ apiBaseUrl, categoryId, onCategoryChange, va
   const aspects = { ...baseAspects, ...value.aspects };
   const issues = requirements ? validateEbayCategory(requirements, value.condition, aspects) : [];
 
-  async function checkCategory() {
+  useEffect(() => {
     const id = ++requestId.current;
-    setLoading(true);
-    setError("");
+    const controller = new AbortController();
     setRequirements(undefined);
-    try {
-      const response = await fetch(`${apiBaseUrl}/channel-connections/ebay/category-requirements?categoryId=${encodeURIComponent(categoryId.trim())}`, { credentials: "include" });
-      const body = await response.json() as { item?: EbayCategoryRequirements; message?: string };
-      if (!response.ok || !body.item) throw new Error(body.message || text.error);
-      if (id === requestId.current) setRequirements(body.item);
-    } catch (error) {
-      if (id === requestId.current) setError(error instanceof Error ? error.message : text.error);
-    } finally {
-      if (id === requestId.current) setLoading(false);
+    setError("");
+    if (!/^\d{1,12}$/.test(categoryId.trim())) { setLoading(false); return; }
+    setLoading(true);
+    async function load() {
+      try {
+        const response = await fetch(apiBaseUrl + "/channel-connections/ebay/category-requirements?categoryId=" + encodeURIComponent(categoryId.trim()), { credentials: "include", signal: controller.signal });
+        const body = await response.json() as { item?: EbayCategoryRequirements; message?: string };
+        if (!response.ok || !body.item) throw new Error(body.message || text.error);
+        if (id === requestId.current && !controller.signal.aborted) setRequirements(body.item);
+      } catch (err) {
+        if (id === requestId.current && !controller.signal.aborted) setError(err instanceof Error ? err.message : text.error);
+      } finally {
+        if (id === requestId.current && !controller.signal.aborted) setLoading(false);
+      }
     }
+    void load();
+    return () => controller.abort();
+  }, [apiBaseUrl, categoryId, revision, text.error]);
+
+  function selectCategory(id: string) {
+    if (id !== categoryId) onChange({ condition: "", conditionDescription: "", aspects: {} });
+    onCategoryChange(id);
+    setChoosing(false);
   }
 
   function renderAspect(aspect: EbayCategoryRequirements["aspects"][number]) {
@@ -72,45 +89,45 @@ export function EbayProductFields({ apiBaseUrl, categoryId, onCategoryChange, va
   }
 
   return <section className="field field-full" aria-label="eBay">
-    <label className="field">
-      <span>{text.category}</span>
-      <input inputMode="numeric" value={categoryId} onChange={event => {
+    {choosing ? <EbayCategoryPicker apiBaseUrl={apiBaseUrl} locale={locale} onSelect={selectCategory} /> : <div className="row">
+      <strong>{requirements?.categoryName || (loading ? text.loading : copy.category + " " + categoryId)}</strong>
+      <button type="button" className="button-secondary" onClick={() => setChoosing(true)}>{copy.change}</button>
+    </div>}
+    <details>
+      <summary>{copy.manual}</summary>
+      <label className="field"><span>{text.category}</span><input inputMode="numeric" value={categoryId} onChange={event => {
         ++requestId.current;
         setRequirements(undefined);
-        setError("");
-        setLoading(false);
         onCategoryChange(event.target.value);
-      }} />
-      <span className="field-hint">{text.hint}</span>
-    </label>
-    <div className="row">
-      <button className="button-secondary" disabled={loading || !/^\d{1,12}$/.test(categoryId.trim())} onClick={() => void checkCategory()} type="button">{loading ? text.loading : text.check}</button>
-      <a href="https://www.ebay.com/n/all-categories" target="_blank" rel="noreferrer">{text.find}</a>
-    </div>
-    {error ? <p role="alert" className="field-error">{error}</p> : null}
+      }} /><span className="field-hint">{text.hint}</span></label>
+    </details>
+    {loading ? <p role="status" className="field-hint">{text.loading}</p> : null}
+    {error ? <div role="alert"><p className="field-error">{error}</p><button type="button" className="button-secondary" onClick={() => setRevision(value => value + 1)}>{copy.retry}</button></div> : null}
     {!requirements && value.condition ? <p className="field-hint">{text.condition}: {value.condition}</p> : null}
     {requirements ? <>
-      <strong>{requirements.categoryName} ({requirements.categoryId}) / {requirements.marketplaceId}</strong>
+      {choosing ? <strong>{requirements.categoryName}</strong> : null}
       <label className="field">
         <span>{text.condition}</span>
+        <span className="field-hint">{copy.conditionHint}</span>
         <select value={value.condition} onChange={event => onChange({ ...value, condition: event.target.value })}>
           <option value="">{text.choose}</option>
           {value.condition && !requirements.conditions.some(item => item.value === value.condition) ? <option value={value.condition}>{value.condition} (invalid)</option> : null}
           {requirements.conditions.map(item => <option key={item.value} value={item.value} disabled={!item.supported}>{item.label}{!item.supported ? ` (${text.unsupported})` : ""}</option>)}
         </select>
       </label>
+      <details open={Boolean(value.conditionDescription)}><summary>{text.description}</summary>
       <label className="field">
-        <span>{text.description}</span>
         <textarea rows={2} maxLength={1000} value={value.conditionDescription} onChange={event => onChange({ ...value, conditionDescription: event.target.value })} />
       </label>
+      </details>
       <strong>{text.specifics}</strong>
-      <div className="variant-grid">{requirements.aspects.filter(item => item.required || ["Brand", "Material", "Color"].includes(item.name)).map(renderAspect)}</div>
+      <div className="variant-grid">{requirements.aspects.filter(item => item.required).map(renderAspect)}</div>
       <details>
         <summary>{text.optional}</summary>
-        <div className="variant-grid">{requirements.aspects.filter(item => !item.required && !["Brand", "Material", "Color"].includes(item.name)).map(renderAspect)}</div>
+        <div className="variant-grid">{requirements.aspects.filter(item => !item.required).map(renderAspect)}</div>
       </details>
-      {issues.length ? <ul className="field-error">{issues.map(issue => <li key={issue}>{issue}</li>)}</ul> : null}
-      <p className="field-hint" role="status">{text.checked}</p>
+      <p className="field-hint" role="status">{issues.length ? text.required + ": " + issues.length : text.checked}</p>
+
     </> : null}
   </section>;
 }

@@ -13,13 +13,12 @@ export default async function NewProductPage() {
   const hasReachedProductLimit = usage ? usage.productLimit !== null && usage.productCount >= usage.productLimit : false;
 
   return (
-    <main className="shell">
-      <section className="hero">
+    <main className="shell listing-shell">
+      <section className="listing-header">
         <Link className="pill" href="/">
           {dictionary.common.backToDashboard}
         </Link>
         <h1>{dictionary.newProductPage.title}</h1>
-        <p>{dictionary.newProductPage.description}</p>
       </section>
 
       {hasReachedProductLimit && usage ? (
@@ -41,7 +40,7 @@ export default async function NewProductPage() {
           </div>
         </section>
       ) : (
-        <section className="card" style={{ marginTop: 24 }}>
+        <section className="listing-editor-wrap">
           <ProductEditor apiBaseUrl={getClientApiBaseUrl()} locale={locale} />
         </section>
       )}
