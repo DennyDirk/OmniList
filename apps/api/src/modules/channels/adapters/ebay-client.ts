@@ -157,6 +157,9 @@ export async function refreshEbayUserAccessToken(env: ApiEnv, credentials: Recor
 }
 
 export async function ensureValidEbayAccessToken(env: ApiEnv, credentials: Record<string, string>) {
+  if (credentials.environment && credentials.environment !== env.ebayEnvironment) {
+    throw new Error("EBAY_ENVIRONMENT_CHANGED_RECONNECT_REQUIRED");
+  }
   const accessToken = credentials.accessToken;
   const accessTokenExpiresAt = credentials.accessTokenExpiresAt ? Date.parse(credentials.accessTokenExpiresAt) : NaN;
   const isExpired = !accessToken || Number.isNaN(accessTokenExpiresAt) || accessTokenExpiresAt <= Date.now() + 60_000;

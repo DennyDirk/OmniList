@@ -117,7 +117,7 @@ export function EbayProductFields({ apiBaseUrl, categoryId, onCategoryChange, va
       </label>
       <details open={Boolean(value.conditionDescription)}><summary>{text.description}</summary>
       <label className="field">
-        <textarea rows={2} maxLength={1000} value={value.conditionDescription} onChange={event => onChange({ ...value, conditionDescription: event.target.value })} />
+        <textarea aria-label={text.description} rows={2} maxLength={1000} value={value.conditionDescription} onChange={event => onChange({ ...value, conditionDescription: event.target.value })} />
       </label>
       </details>
       <strong>{text.specifics}</strong>
