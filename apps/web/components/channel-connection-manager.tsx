@@ -91,7 +91,8 @@ export function ChannelConnectionManager({ apiBaseUrl, capabilities, initialConn
     <section className="card">
       <div className="row"><h2>eBay</h2><span className={"pill " + (connected ? "ready" : "attention")}>{formatConnectionStatus(dictionary, connection?.status ?? "disconnected")}</span></div>
       <p>{connection?.externalAccountId || text.connect}</p>
-      {metadata.environment ? <p className="pill">{metadata.environment === "sandbox" ? text.sandbox : text.production} / United States / USD</p> : null}
+      <p className="pill">{metadata.environment === "sandbox" ? text.sandbox : metadata.environment === "production" ? text.production : text.environmentUnknown} / {metadata.marketplaceId} / {metadata.currency}</p>
+      {metadata.marketplaceId !== "EBAY_US" || metadata.currency !== "USD" ? <p className="issue blocking">{text.unsupportedMarket}</p> : null}
       {!connected ? <button type="button" className="button-primary" disabled={disabled || !enabled} onClick={connect}>{dictionary.channelManager.connectChannel}</button> : <>
         <p className="muted">{text.storeHint}</p>
         <details className="listing-section" open={!complete}>

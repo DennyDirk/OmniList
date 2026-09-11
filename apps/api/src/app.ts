@@ -26,6 +26,7 @@ import { listChannels } from "./modules/channels/channels.service";
 import { ensureValidEbayAccessToken, getEbaySellerSetupOptions } from "./modules/channels/adapters/ebay-client";
 import { EbayPreparationError, getEbayCategoryRequirements } from "./modules/channels/adapters/ebay-category";
 import { searchEbayCategories } from "./modules/channels/adapters/ebay-category-search";
+import { getEbayListingStatus } from "./modules/channels/adapters/ebay-listing-status";
 import { createMediaService } from "./modules/media/media.service";
 import { createInventoryRepository } from "./modules/inventory/inventory.repository";
 import { createInventoryService } from "./modules/inventory/inventory.service";
@@ -403,6 +404,24 @@ export async function buildApp() {
     }
 
     return { item: product };
+  });
+
+  app.get("/products/:productId/ebay-listing", async (request, reply) => {
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    const { productId } = request.params as { productId: string };
+    const product = await catalogService.getProductById(session.workspace.id, productId);
+    if (!product) return reply.code(404).send({ message: "Product not found." });
+    const record = await channelConnectionRepository.getConnectionRecord(session.workspace.id, "ebay");
+    if (!record || record.connection.status !== "connected") return reply.code(409).send({ message: "Connect eBay to check this listing." });
+    try {
+      const auth = await ensureValidEbayAccessToken(env, record.credentials);
+      await channelConnectionRepository.setCredentials(session.workspace.id, "ebay", auth.credentials);
+      const item = await getEbayListingStatus(env, auth.accessToken, product.sku, record.connection.metadata.marketplaceId?.trim() || "EBAY_US");
+      return reply.header("Cache-Control", "private, no-store").send({ item });
+    } catch (error) {
+      return reply.code(502).send({ message: error instanceof EbayPreparationError ? error.message : "Could not verify this listing. Check the eBay connection and try again." });
+    }
   });
 
   app.post("/products", async (request, reply) => {

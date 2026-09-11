@@ -169,7 +169,9 @@ test("unsigned OAuth cookie cannot choose a victim workspace", async () => {
   const repository = createChannelConnectionRepository();
   const auth = createChannelAuthService(repository, env);
   await assert.rejects(auth.completeConnection({ channelId: "ebay", code: "test-code", returnedState: "forged", stateCookieValue: Buffer.from(JSON.stringify({ workspaceId: "victim", channelId: "ebay", state: "forged" })).toString("base64url") }), /INVALID_CHANNEL_CONNECT_STATE/);
-  assert.equal(await repository.getConnectionRecord("victim", "ebay"), undefined);
+  const unchanged = await repository.getConnectionRecord("victim", "ebay");
+  assert.equal(unchanged?.connection.status, "disconnected");
+  assert.deepEqual(unchanged?.credentials, {});
 });
 
 test("system errors during setup are errors, never successful empty policy lists", async () => {
