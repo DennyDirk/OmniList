@@ -25,6 +25,7 @@ import { CHANNEL_CONNECT_STATE_COOKIE_NAME, createChannelAuthService } from "./m
 import { listChannels } from "./modules/channels/channels.service";
 import { ensureValidEbayAccessToken, getEbaySellerSetupOptions } from "./modules/channels/adapters/ebay-client";
 import { EbayPreparationError, getEbayCategoryRequirements } from "./modules/channels/adapters/ebay-category";
+import { searchEbayCategories } from "./modules/channels/adapters/ebay-category-search";
 import { createMediaService } from "./modules/media/media.service";
 import { createInventoryRepository } from "./modules/inventory/inventory.repository";
 import { createInventoryService } from "./modules/inventory/inventory.service";
@@ -75,6 +76,23 @@ export async function buildApp() {
 
   await app.register(cookie, {
     secret: "omnilist-dev-cookie-secret"
+  });
+
+  app.get("/channel-connections/ebay/categories", async (request, reply) => {
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    const q = (request.query as { q?: unknown }).q;
+    if (typeof q !== "string" || q.trim().length < 2 || q.length > 80) {
+      return reply.code(400).send({ message: "Search using 2 to 80 characters." });
+    }
+    const record = await channelConnectionRepository.getConnectionRecord(session.workspace.id, "ebay");
+    if (!record || record.connection.status !== "connected") return reply.code(409).send({ message: "Connect eBay before choosing a category." });
+    try {
+      const items = await searchEbayCategories(env, record.connection.metadata.marketplaceId?.trim() || "EBAY_US", q.trim());
+      return reply.header("Cache-Control", "private, no-store").send({ items });
+    } catch (error) {
+      return reply.code(502).send({ message: error instanceof EbayPreparationError ? error.message : "Could not load eBay categories. Try again." });
+    }
   });
 
   app.get("/channel-connections/ebay/category-requirements", async (request, reply) => {
