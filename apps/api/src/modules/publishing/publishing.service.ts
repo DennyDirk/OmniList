@@ -24,10 +24,6 @@ function buildChannelTitle(product: Product, channelId: ChannelId) {
     return effectiveProduct.title;
   }
 
-  if (channelId === "etsy") {
-    return `${product.title} | Handmade Style`;
-  }
-
   return product.title;
 }
 
@@ -92,6 +88,7 @@ async function processTargets(
   const registry = createChannelPublishRegistry(env);
 
   return Promise.all(targets.map(async (target) => {
+    let remoteListing: PublishJobTarget["remoteListing"];
     try {
     const readiness = validateProductForChannel(product, target.channelId);
     const connectionRecord = connectionsByChannel.get(target.channelId);
@@ -120,6 +117,7 @@ async function processTargets(
     const adapterResult = connectionRecord ? await registry.publish(product, target.channelId, connectionRecord) : undefined;
 
     if (adapterResult) {
+      remoteListing = adapterResult.remoteListing;
       if (adapterResult.updatedCredentials) {
         await channelConnectionRepository.setCredentials(
           connection.workspaceId,
@@ -133,7 +131,9 @@ async function processTargets(
         status: adapterResult.status,
         readinessScore: readiness.score,
         issueCount: readiness.issues.length,
-        message: adapterResult.message
+        message: adapterResult.message,
+        connectionId: connection.id,
+        remoteListing: adapterResult.remoteListing
       };
     }
 
@@ -145,7 +145,7 @@ async function processTargets(
         message: "Publishing to this channel is not implemented yet. No listing was created."
       };
     } catch {
-      return { ...target, status: "failed", message: "Publishing could not be confirmed because a service request failed. Check eBay for this SKU before retrying." };
+      return { ...target, remoteListing, status: "failed", message: "Publishing could not be confirmed because a service request failed. Check the connected store before retrying." };
     }
   }));
 }
@@ -169,7 +169,10 @@ export function createPublishingService(
       connections: ChannelConnection[];
       connectionRecords: ChannelConnectionRecord[];
     }) {
-      const queuedTargets = toQueuedTargets(input.product, [...new Set(input.channelIds)]);
+      const queuedTargets = toQueuedTargets(input.product, [...new Set(input.channelIds)]).map(target => ({
+        ...target,
+        connectionId: input.connectionRecords.find(record => record.connection.channelId === target.channelId)?.connection.id
+      }));
 
       const job = await repository.createJob({
         workspaceId: input.workspaceId,
@@ -203,7 +206,7 @@ export function createPublishingService(
         const targets = job.targets.map(target => ({
           ...target,
           status: "failed" as const,
-          message: "The publishing task was interrupted. Check the listing on eBay before retrying."
+          message: "The publishing task was interrupted. Check the connected store before retrying."
         }));
         await repository.updateJob(input.workspaceId, job.id, "failed", targets);
       }).catch(() => {

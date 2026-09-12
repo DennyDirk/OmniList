@@ -3,13 +3,8 @@ import type { ChannelDraftPreview, ChannelId } from "@omnilist/shared";
 import type { ApiEnv } from "../../../config/env";
 import type { ChannelConnectionRecord } from "../../channels/channel-connections.repository";
 import type { Product } from "@omnilist/shared";
-import { createEbayPublishAdapter, type ChannelPublishAdapter } from "./ebay-publish.adapter";
-
-export interface ChannelPublishExecutionResult {
-  status: "published" | "failed";
-  message: string;
-  updatedCredentials?: Record<string, string>;
-}
+import { createEbayPublishAdapter } from "./ebay-publish.adapter";
+import type { ChannelPublishAdapter, ChannelPublishExecutionResult } from "./channel-publish.contract";
 
 export function createChannelPublishRegistry(env: ApiEnv) {
   const adapters = new Map<ChannelId, ChannelPublishAdapter>();

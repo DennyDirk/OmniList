@@ -42,7 +42,9 @@ function buildJob(
       status: target.status as PublishJobTarget["status"],
       readinessScore: target.readinessScore,
       issueCount: target.issueCount,
-      message: target.message ?? undefined
+      message: target.message ?? undefined,
+      connectionId: target.connectionId ?? undefined,
+      remoteListing: target.remoteListing ?? undefined
     }))
   };
 }
@@ -155,6 +157,8 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
             readinessScore: target.readinessScore,
             issueCount: target.issueCount,
             message: target.message,
+            connectionId: target.connectionId,
+            remoteListing: target.remoteListing,
             createdAt: now,
             updatedAt: now
           }))
@@ -230,6 +234,8 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
               readinessScore: target.readinessScore,
               issueCount: target.issueCount,
               message: target.message,
+              connectionId: target.connectionId ?? null,
+              remoteListing: target.remoteListing ?? null,
               updatedAt: now
             })
             .where(and(eq(publishJobTargetsTable.publishJobId, jobId), eq(publishJobTargetsTable.id, target.id)));

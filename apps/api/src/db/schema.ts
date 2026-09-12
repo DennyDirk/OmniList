@@ -1,6 +1,6 @@
 import { integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/pg-core";
 
-import type { ProductAsset, ProductChannelOverride, ProductVariant } from "@omnilist/shared";
+import type { ProductAsset, ProductChannelOverride, ProductVariant, RemoteListingReference } from "@omnilist/shared";
 
 export const workspacesTable = pgTable("workspaces", {
   id: varchar("id", { length: 64 }).primaryKey(),
@@ -94,6 +94,8 @@ export const publishJobTargetsTable = pgTable("publish_job_targets", {
     .notNull(),
   channelId: varchar("channel_id", { length: 32 }).notNull(),
   channelName: varchar("channel_name", { length: 128 }).notNull(),
+  connectionId: varchar("connection_id", { length: 64 }),
+  remoteListing: jsonb("remote_listing").$type<RemoteListingReference>(),
   status: varchar("status", { length: 32 }).notNull(),
   readinessScore: integer("readiness_score").notNull(),
   issueCount: integer("issue_count").notNull(),
