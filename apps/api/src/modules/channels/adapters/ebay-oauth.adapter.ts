@@ -1,18 +1,7 @@
 import type { ApiEnv } from "../../../config/env";
 import { exchangeEbayAuthorizationCode, getEbayBaseUrls, getEbayUserProfile, mapTokenToStoredCredentials } from "./ebay-client";
 
-export interface ChannelOAuthCompletionResult {
-  externalAccountId: string;
-  publicMetadata: Record<string, string>;
-  credentials: Record<string, string>;
-}
-
-export interface ChannelOAuthAdapter {
-  providerLabel: string;
-  isConfigured(): boolean;
-  beginConnection(state: string): string;
-  completeConnection(code: string): Promise<ChannelOAuthCompletionResult>;
-}
+import type { ChannelOAuthAdapter } from "./channel-oauth.contract";
 
 export function createEbayOAuthAdapter(env: ApiEnv): ChannelOAuthAdapter | undefined {
   const clientId = env.ebayClientId;

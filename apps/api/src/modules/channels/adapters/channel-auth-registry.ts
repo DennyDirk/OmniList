@@ -1,7 +1,8 @@
 import { channels, type ChannelConnectionCapability, type ChannelId } from "@omnilist/shared";
 
 import type { ApiEnv } from "../../../config/env";
-import { createEbayOAuthAdapter, type ChannelOAuthAdapter } from "./ebay-oauth.adapter";
+import { createEbayOAuthAdapter } from "./ebay-oauth.adapter";
+import type { ChannelOAuthAdapter } from "./channel-oauth.contract";
 
 export function createChannelAuthRegistry(env: ApiEnv) {
   const adapters = new Map<ChannelId, ChannelOAuthAdapter>();

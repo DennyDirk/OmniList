@@ -4,19 +4,15 @@ import {
   buildEbayAspects,
   validateEbayCategory,
   type ChannelDraftPreview,
-  type Product
+  type Product,
+  type RemoteListingReference
 } from "@omnilist/shared";
 
 import type { ApiEnv } from "../../../config/env";
 import type { ChannelConnectionRecord } from "../../channels/channel-connections.repository";
-import type { ChannelPublishExecutionResult } from "./channel-publish-registry";
+import type { ChannelPublishAdapter } from "./channel-publish.contract";
 import { callEbayInventoryApi, ensureValidEbayAccessToken } from "../../channels/adapters/ebay-client";
 import { EbayPreparationError, getEbayCategoryRequirements } from "../../channels/adapters/ebay-category";
-
-export interface ChannelPublishAdapter {
-  buildDraft(product: Product, connection?: ChannelConnectionRecord): ChannelDraftPreview;
-  publish(product: Product, connection: ChannelConnectionRecord): Promise<ChannelPublishExecutionResult>;
-}
 
 interface EbayApiErrorShape {
   errorId?: number | string;
@@ -258,6 +254,11 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       const payload = draft.payload as { inventoryItemPayload: unknown; offerPayload: Record<string, unknown> };
       const offerPayload = payload.offerPayload;
       const sku = String(offerPayload.sku);
+      const reference = (offerId: string, listingId?: string): RemoteListingReference => ({
+        channelId: "ebay", environment: env.ebayEnvironment,
+        marketplaceId: String(offerPayload.marketplaceId), sku, offerId,
+        ...(listingId ? { listingId } : {})
+      });
 
       try {
         const requirements = await getEbayCategoryRequirements(env, auth.accessToken, String(offerPayload.marketplaceId), String(offerPayload.categoryId));
@@ -337,6 +338,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
             message: existingOffer.listing?.listingId
               ? `Updated live eBay listing ${existingOffer.listing.listingId}.`
               : "Updated live eBay listing.",
+            remoteListing: reference(offerId, existingOffer.listing?.listingId),
             updatedCredentials: auth.credentials
           };
         }
@@ -365,48 +367,60 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         offerId = createOfferResponse.data.offerId;
       }
 
-      const publishResponse = await callEbayInventoryApi<{
-        listingId?: string;
-        errors?: EbayApiErrorShape[];
-      }>(env, auth.accessToken, {
-        path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId!)}/publish`,
-        method: "POST"
-      });
+      try {
+        const publishResponse = await callEbayInventoryApi<{
+          listingId?: string;
+          errors?: EbayApiErrorShape[];
+        }>(env, auth.accessToken, {
+          path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId!)}/publish`,
+          method: "POST"
+        });
 
-      if (!publishResponse.ok) {
-        if (isOfferUnavailableResponse(publishResponse)) {
-          const offerDetailsResponse = await callEbayInventoryApi<EbayOfferSummary & { errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
-            path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId!)}`,
-            method: "GET"
-          });
+        if (!publishResponse.ok) {
+          if (isOfferUnavailableResponse(publishResponse)) {
+            const offerDetailsResponse = await callEbayInventoryApi<EbayOfferSummary & { errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
+              path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId!)}`,
+              method: "GET"
+            });
 
-          if (offerDetailsResponse.ok && offerDetailsResponse.data && isPublishedOffer(offerDetailsResponse.data)) {
-            return {
-              status: "published",
-              message: offerDetailsResponse.data.listing?.listingId
-                ? `Updated live eBay listing ${offerDetailsResponse.data.listing.listingId}.`
-                : "Updated live eBay listing.",
-              updatedCredentials: auth.credentials
-            };
+            if (offerDetailsResponse.ok && offerDetailsResponse.data && isPublishedOffer(offerDetailsResponse.data)) {
+              return {
+                status: "published",
+                message: offerDetailsResponse.data.listing?.listingId
+                  ? `Updated live eBay listing ${offerDetailsResponse.data.listing.listingId}.`
+                  : "Updated live eBay listing.",
+                remoteListing: reference(offerId!, offerDetailsResponse.data.listing?.listingId),
+                updatedCredentials: auth.credentials
+              };
+            }
           }
+
+          const message = formatEbayError(publishResponse, "eBay publish offer failed.");
+
+          return {
+            status: "failed",
+            message: isOfferUnavailableResponse(publishResponse) ? addUnavailableOfferHint(message) : message,
+            remoteListing: reference(offerId!),
+            updatedCredentials: auth.credentials
+          };
         }
 
-        const message = formatEbayError(publishResponse, "eBay publish offer failed.");
-
+        return {
+          status: publishResponse.data?.listingId ? "published" : "failed",
+          message: publishResponse.data?.listingId
+            ? `Published to eBay listing ${publishResponse.data.listingId}.`
+            : "eBay did not confirm a listing ID. Check this SKU on eBay before retrying.",
+          remoteListing: reference(offerId!, publishResponse.data?.listingId),
+          updatedCredentials: auth.credentials
+        };
+      } catch {
         return {
           status: "failed",
-          message: isOfferUnavailableResponse(publishResponse) ? addUnavailableOfferHint(message) : message,
+          message: "eBay publication could not be confirmed. Check the saved offer before retrying.",
+          remoteListing: reference(offerId!),
           updatedCredentials: auth.credentials
         };
       }
-
-      return {
-        status: publishResponse.data?.listingId ? "published" : "failed",
-        message: publishResponse.data?.listingId
-          ? `Published to eBay listing ${publishResponse.data.listingId}.`
-          : "eBay did not confirm a listing ID. Check this SKU on eBay before retrying.",
-        updatedCredentials: auth.credentials
-      };
     }
   };
 }

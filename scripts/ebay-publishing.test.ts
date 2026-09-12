@@ -6,7 +6,7 @@ import { getEbayCategoryRequirements } from "../apps/api/src/modules/channels/ad
 import { getEbaySellerSetupOptions } from "../apps/api/src/modules/channels/adapters/ebay-client";
 import { createChannelAuthService } from "../apps/api/src/modules/channels/channel-auth.service";
 import { createChannelConnectionRepository, type ChannelConnectionRecord } from "../apps/api/src/modules/channels/channel-connections.repository";
-import { createPublishingService } from "../apps/api/src/modules/publishing/publishing.service";
+import { buildPublishPreview, createPublishingService } from "../apps/api/src/modules/publishing/publishing.service";
 import { createPublishJobRepository } from "../apps/api/src/modules/publishing/publishing.repository";
 import type { ApiEnv } from "../apps/api/src/config/env";
 
@@ -29,7 +29,7 @@ const record: ChannelConnectionRecord = {
 };
 
 type Call = { path: string; method: string; body: any; headers: Headers };
-interface Options { cards?: boolean; parent?: boolean; empty?: boolean; unavailable?: boolean; networkError?: boolean; noListingId?: boolean; live?: boolean; metadataStatus?: number }
+interface Options { cards?: boolean; parent?: boolean; empty?: boolean; unavailable?: boolean; networkError?: boolean; publishNetworkError?: boolean; noListingId?: boolean; live?: boolean; metadataStatus?: number }
 async function withEbay(options: Options, run: (calls: Call[]) => Promise<void>) {
   const original = globalThis.fetch;
   const calls: Call[] = [];
@@ -59,7 +59,10 @@ async function withEbay(options: Options, run: (calls: Call[]) => Promise<void>)
     }
     if (url.pathname.endsWith("/offer") && call.method === "GET") return json({ offers: options.live ? [{ offerId: "offer", status: "PUBLISHED", listing: { listingId: "123", listingStatus: "ACTIVE" } }] : [] });
     if (url.pathname.endsWith("/offer") && call.method === "POST") return json({ offerId: "offer" }, 201);
-    if (url.pathname.endsWith("/publish")) return options.unavailable ? json({ errors: [{ errorId: 25713, message: "This Offer is not available." }] }, 400) : json(options.noListingId ? {} : { listingId: "123" });
+    if (url.pathname.endsWith("/publish")) {
+      if (options.publishNetworkError) throw new TypeError("fetch failed after sending publish");
+      return options.unavailable ? json({ errors: [{ errorId: 25713, message: "This Offer is not available." }] }, 400) : json(options.noListingId ? {} : { listingId: "123" });
+    }
     if (url.pathname.endsWith("/offer/offer")) return call.method === "PUT" ? new Response(null, { status: 204 }) : json({ offerId: "offer", status: "UNPUBLISHED", listing: { listingId: "old", listingStatus: "ENDED" } });
     throw new Error(`Unexpected eBay request: ${call.method} ${call.path}`);
   };
@@ -71,6 +74,7 @@ test("shirt publishes only after metadata validation, with photos and string-arr
     const result = await createEbayPublishAdapter(env).publish(product, record);
     assert.equal(result.status, "published");
     assert.match(result.message, /123/);
+    assert.deepEqual(result.remoteListing, { channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US", sku: "SHIRT-1", offerId: "offer", listingId: "123" });
     const inventory = calls.find(call => call.path.includes("inventory_item"))!;
     assert.equal(inventory.body.imageUrls, undefined);
     assert.deepEqual(inventory.body.product.imageUrls, [product.images[0].url]);
@@ -134,13 +138,69 @@ test("existing active listing is updated without creating or publishing another 
   await withEbay({ live: true }, async calls => {
     const result = await createEbayPublishAdapter(env).publish(product, record);
     assert.equal(result.status, "published");
+    assert.equal(result.remoteListing?.channelId, "ebay");
+    assert.equal(result.remoteListing?.channelId === "ebay" && result.remoteListing.listingId, "123");
     assert(!calls.some(call => call.method === "POST" && call.path.includes("/offer")));
   });
 });
 
 test("HTTP success without a listing ID is not published success", async () => {
   await withEbay({ noListingId: true }, async () => {
-    assert.equal((await createEbayPublishAdapter(env).publish(product, record)).status, "failed");
+    const result = await createEbayPublishAdapter(env).publish(product, record);
+    assert.equal(result.status, "failed");
+    assert.deepEqual(result.remoteListing, { channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US", sku: "SHIRT-1", offerId: "offer" });
+  });
+});
+
+test("Etsy preview never invents handmade claims and preserves explicit overrides", () => {
+  assert.equal(buildPublishPreview(product, ["etsy"]).items[0].title, product.title);
+  const custom = structuredClone(product);
+  custom.channelOverrides.etsy = { title: "Seller supplied title" };
+  assert.equal(buildPublishPreview(custom, ["etsy"]).items[0].title, "Seller supplied title");
+});
+
+test("a publish transport failure retains the known offer without inventing a listing ID", async () => {
+  await withEbay({ publishNetworkError: true }, async calls => {
+    const result = await createEbayPublishAdapter(env).publish(product, record);
+    assert.equal(result.status, "failed");
+    assert.deepEqual(result.remoteListing, { channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US", sku: "SHIRT-1", offerId: "offer" });
+    assert.equal(calls.filter(call => call.path.endsWith("/publish")).length, 1);
+  });
+});
+
+test("credential persistence failure does not discard a known remote listing", async () => {
+  await withEbay({}, async () => {
+    const jobs = createPublishJobRepository();
+    const connections = createChannelConnectionRepository();
+    connections.setCredentials = async () => { throw new Error("database unavailable"); };
+    const service = createPublishingService(jobs, connections, env);
+    const job = await service.enqueuePublishJob({ workspaceId: "workspace", product, channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] });
+    let final = await jobs.getJob("workspace", job.id);
+    for (let i = 0; i < 100 && ["queued", "processing"].includes(final!.status); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      final = await jobs.getJob("workspace", job.id);
+    }
+    assert.equal(final?.status, "failed");
+    const remote = final?.targets[0].remoteListing;
+    assert.equal(remote?.channelId === "ebay" && remote.listingId, "123");
+  });
+});
+
+test("publish job stores the connection and typed remote identity without leaking tokens", async () => {
+  await withEbay({}, async () => {
+    const jobs = createPublishJobRepository();
+    const service = createPublishingService(jobs, createChannelConnectionRepository(), env);
+    const job = await service.enqueuePublishJob({ workspaceId: "workspace", product, channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] });
+    assert.equal(job.targets[0].connectionId, record.connection.id);
+    let final = await jobs.getJob("workspace", job.id);
+    for (let i = 0; i < 100 && ["queued", "processing"].includes(final!.status); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      final = await jobs.getJob("workspace", job.id);
+    }
+    assert.equal(final?.status, "completed");
+    assert.deepEqual(final?.targets[0].remoteListing, { channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US", sku: "SHIRT-1", offerId: "offer", listingId: "123" });
+    assert(!JSON.stringify(final).includes("test-user-token"));
+    assert.equal(await jobs.getJob("another-workspace", job.id), undefined);
   });
 });
 

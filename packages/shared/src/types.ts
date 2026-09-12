@@ -140,11 +140,18 @@ export interface ChannelDraftPreview {
   payload: Record<string, unknown>;
 }
 
+export type RemoteListingReference =
+  | { channelId: "ebay"; environment: "sandbox" | "production"; marketplaceId: string; sku: string; offerId: string; listingId?: string }
+  | { channelId: "shopify"; shopId: string; productId: string }
+  | { channelId: "etsy"; shopId: string; listingId: string };
+
 export interface PublishJobTarget {
   id: string;
   channelId: ChannelId;
   channelName: string;
   status: PublishTargetStatus;
+  connectionId?: string;
+  remoteListing?: RemoteListingReference;
   readinessScore: number;
   issueCount: number;
   message?: string;
