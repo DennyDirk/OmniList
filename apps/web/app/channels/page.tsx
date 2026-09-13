@@ -5,6 +5,7 @@ import { requireAuthSession } from "../../lib/auth";
 import { getChannelCapabilities, getChannelConnections, getChannels, getClientApiBaseUrl } from "../../lib/api";
 import { getI18n } from "../../lib/i18n.server";
 import { publishCopy } from "../../lib/publish-copy";
+import { ebayCatalogCopy } from "../../lib/ebay-catalog-copy";
 
 export default async function ChannelsPage({ searchParams }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -24,5 +25,7 @@ export default async function ChannelsPage({ searchParams }: {
     <header className="listing-header"><Link className="text-link" href="/">{publishCopy[locale].catalog}</Link><h1>eBay</h1></header>
     {message ? <FlashOnMount clearQueryKeys={["connected", "disconnected", "error"]} message={message} tone={error ? "error" : "success"} /> : null}
     <ChannelConnectionManager apiBaseUrl={getClientApiBaseUrl()} capabilities={capabilities} channels={channels} initialConnections={connections} locale={locale} />
+    {connections.some(connection => connection.channelId === "ebay" && connection.status === "connected")
+      ? <Link className="button-secondary" href={{ pathname: "/channels/ebay/catalog" }}>{ebayCatalogCopy[locale].title}</Link> : null}
   </main>;
 }

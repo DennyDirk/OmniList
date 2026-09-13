@@ -19,6 +19,7 @@ import { getEnv } from "./config/env";
 import { createAuthService, extractAccessToken } from "./modules/auth/auth.service";
 import { createProductRepository } from "./modules/catalog/catalog.repository";
 import { createCatalogService } from "./modules/catalog/catalog.service";
+import { createEbayCatalogService, EbayCatalogError } from "./modules/catalog/ebay-catalog.service";
 import { createChannelConnectionRepository } from "./modules/channels/channel-connections.repository";
 import { createChannelConnectionsService } from "./modules/channels/channel-connections.service";
 import { CHANNEL_CONNECT_STATE_COOKIE_NAME, createChannelAuthService } from "./modules/channels/channel-auth.service";
@@ -61,6 +62,7 @@ export async function buildApp() {
   const inventoryRepository = createInventoryRepository(db);
   const mediaService = createMediaService(env);
   const catalogService = createCatalogService(productRepository, mediaService);
+  const ebayCatalogService = createEbayCatalogService(channelConnectionRepository, env);
   const inventoryService = createInventoryService(productRepository, inventoryRepository);
   const channelConnectionsService = createChannelConnectionsService(channelConnectionRepository);
   const channelAuthService = createChannelAuthService(channelConnectionRepository, env);
@@ -387,6 +389,23 @@ export async function buildApp() {
     return {
       items: await catalogService.listProducts(session.workspace.id)
     };
+  });
+
+  app.get("/channel-connections/ebay/catalog", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    const offset = (request.query as { offset?: unknown }).offset ?? "0";
+    if (typeof offset !== "string" || !/^\d{1,6}$/.test(offset)) {
+      return reply.code(400).send({ message: "Invalid catalog page." });
+    }
+    try {
+      return { item: await ebayCatalogService.list(session.workspace.id, Number(offset)) };
+    } catch (error) {
+      return reply.code(error instanceof EbayCatalogError ? error.status : 502).send({
+        message: error instanceof EbayCatalogError ? error.message : "Could not load the eBay catalog. Try again."
+      });
+    }
   });
 
   app.get("/products/:productId", async (request, reply) => {

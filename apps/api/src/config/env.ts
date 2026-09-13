@@ -17,6 +17,7 @@ export interface ApiEnv {
 export function getEnv(): ApiEnv {
   const port = Number(process.env.PORT ?? 4000);
   const defaultEbayScopes = [
+    "https://api.ebay.com/oauth/api_scope",
     "https://api.ebay.com/oauth/api_scope/sell.inventory",
     "https://api.ebay.com/oauth/api_scope/sell.account.readonly",
     "https://api.ebay.com/oauth/api_scope/commerce.identity.readonly"
