@@ -6,9 +6,10 @@ export interface ChannelPublishExecutionResult {
   message: string;
   remoteListing?: RemoteListingReference;
   updatedCredentials?: Record<string, string>;
+  requiresReconciliation?: boolean;
 }
 
 export interface ChannelPublishAdapter {
   buildDraft(product: Product, connection?: ChannelConnectionRecord): ChannelDraftPreview;
-  publish(product: Product, connection: ChannelConnectionRecord): Promise<ChannelPublishExecutionResult>;
+  publish(product: Product, connection: ChannelConnectionRecord, remoteListing?: RemoteListingReference): Promise<ChannelPublishExecutionResult>;
 }

@@ -16,6 +16,8 @@ export interface ChannelConnectionRecord {
 }
 
 export interface ChannelConnectionRepository {
+  getConnectionRecordById(workspaceId: string, connectionId: string): Promise<ChannelConnectionRecord | undefined>;
+  setCredentialsForConnection(workspaceId: string, connectionId: string, expectedCredentials: Record<string, string>, credentials: Record<string, string>): Promise<void>;
   listConnections(workspaceId: string): Promise<ChannelConnection[]>;
   getConnection(workspaceId: string, channelId: ChannelId): Promise<ChannelConnection | undefined>;
   getConnectionRecord(workspaceId: string, channelId: ChannelId): Promise<ChannelConnectionRecord | undefined>;
@@ -81,6 +83,16 @@ function createMemoryChannelConnectionRepository(): ChannelConnectionRepository 
   const itemsByWorkspace = new Map<string, Map<string, StoredConnectionItem>>();
 
   return {
+    async getConnectionRecordById(workspaceId, connectionId) {
+      const item = [...getWorkspaceItems(itemsByWorkspace, workspaceId).values()].find(item => item.connection.id === connectionId);
+      return item ? structuredClone(item) : undefined;
+    },
+    async setCredentialsForConnection(workspaceId, connectionId, expectedCredentials, credentials) {
+      const items = getWorkspaceItems(itemsByWorkspace, workspaceId);
+      const item = [...items.values()].find(item => item.connection.id === connectionId);
+      if (!item || item.connection.status !== "connected" || JSON.stringify(item.credentials) !== JSON.stringify(expectedCredentials)) return;
+      items.set(item.connection.channelId, { connection: item.connection, credentials });
+    },
     async listConnections(workspaceId) {
       return [...getWorkspaceItems(itemsByWorkspace, workspaceId).values()].map((item) => item.connection);
     },
@@ -195,6 +207,16 @@ async function ensureDbConnectionRow(db: DbClient, workspaceId: string, channelI
 
 function createDbChannelConnectionRepository(db: DbClient): ChannelConnectionRepository {
   return {
+    async getConnectionRecordById(workspaceId, connectionId) {
+      const [row] = await db.select().from(channelConnectionsTable).where(and(
+        eq(channelConnectionsTable.workspaceId, workspaceId), eq(channelConnectionsTable.id, connectionId))).limit(1);
+      return row ? toConnectionRecord(row) : undefined;
+    },
+    async setCredentialsForConnection(workspaceId, connectionId, expectedCredentials, credentials) {
+      await db.update(channelConnectionsTable).set({ credentials, updatedAt: new Date() }).where(and(
+        eq(channelConnectionsTable.workspaceId, workspaceId), eq(channelConnectionsTable.id, connectionId),
+        eq(channelConnectionsTable.status, "connected"), eq(channelConnectionsTable.credentials, expectedCredentials)));
+    },
     async listConnections(workspaceId) {
       const rows = await db
         .select()

@@ -31,6 +31,7 @@ import { createMediaService } from "./modules/media/media.service";
 import { createInventoryRepository } from "./modules/inventory/inventory.repository";
 import { createInventoryService } from "./modules/inventory/inventory.service";
 import { createPublishJobRepository } from "./modules/publishing/publishing.repository";
+import { createChannelListingRepository } from "./modules/publishing/channel-listings.repository";
 import { buildPublishPreview } from "./modules/publishing/publishing.service";
 import { createPublishingService } from "./modules/publishing/publishing.service";
 import { validateProductAcrossChannels } from "./modules/validation/validation.service";
@@ -63,7 +64,7 @@ export async function buildApp() {
   const inventoryService = createInventoryService(productRepository, inventoryRepository);
   const channelConnectionsService = createChannelConnectionsService(channelConnectionRepository);
   const channelAuthService = createChannelAuthService(channelConnectionRepository, env);
-  const publishingService = createPublishingService(publishJobRepository, channelConnectionRepository, env);
+  const publishingService = createPublishingService(publishJobRepository, channelConnectionRepository, env, createChannelListingRepository(db));
   const workspaceService = createWorkspaceService(workspaceRepository, productRepository);
 
   if (db) {

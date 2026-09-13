@@ -1,4 +1,4 @@
-import type { ChannelDraftPreview, ChannelId } from "@omnilist/shared";
+import type { ChannelDraftPreview, ChannelId, RemoteListingReference } from "@omnilist/shared";
 
 import type { ApiEnv } from "../../../config/env";
 import type { ChannelConnectionRecord } from "../../channels/channel-connections.repository";
@@ -17,14 +17,14 @@ export function createChannelPublishRegistry(env: ApiEnv) {
     buildDraft(product: Product, channelId: ChannelId, connection?: ChannelConnectionRecord): ChannelDraftPreview | undefined {
       return adapters.get(channelId)?.buildDraft(product, connection);
     },
-    async publish(product: Product, channelId: ChannelId, connection: ChannelConnectionRecord): Promise<ChannelPublishExecutionResult | undefined> {
+    async publish(product: Product, channelId: ChannelId, connection: ChannelConnectionRecord, remoteListing?: RemoteListingReference): Promise<ChannelPublishExecutionResult | undefined> {
       const adapter = adapters.get(channelId);
 
       if (!adapter) {
         return undefined;
       }
 
-      return adapter.publish(product, connection);
+      return adapter.publish(product, connection, remoteListing);
     }
   };
 }
