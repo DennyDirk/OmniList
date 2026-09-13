@@ -18,7 +18,8 @@
     "@omnilist/shared": "0.1.0",
     "dotenv": "^16.6.1",
     "drizzle-orm": "^0.44.6",
-    "fastify": "^5.2.1"
+    "fastify": "^5.2.1",
+    "fast-xml-parser": "5.11.1"
   },
   "devDependencies": {
     "drizzle-kit": "^0.31.5",

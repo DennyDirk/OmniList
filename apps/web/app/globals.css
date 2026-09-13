@@ -694,6 +694,12 @@ a {
   gap: 14px;
 }
 
+.ebay-catalog-preview { display: grid; gap: 16px; margin-top: 20px; }
+.ebay-catalog-preview > .button-primary { justify-self: start; }
+.ebay-catalog-items { list-style: none; padding: 0; display: grid; gap: 10px; }
+.ebay-catalog-items li { display: grid; gap: 6px; padding: 16px; border: 1px solid var(--line); border-radius: 14px; overflow-wrap: anywhere; }
+.ebay-catalog-pagination { display: flex; flex-wrap: wrap; gap: 12px; }
+
 .auth-wrap {
   margin-top: 24px;
 }
