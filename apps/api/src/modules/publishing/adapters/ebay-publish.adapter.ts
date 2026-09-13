@@ -26,6 +26,9 @@ interface EbayApiErrorShape {
 
 interface EbayOfferSummary {
   offerId: string;
+  sku?: string;
+  marketplaceId?: string;
+  format?: string;
   status?: string;
   listing?: {
     listingId?: string;
@@ -53,11 +56,6 @@ function isEndedOffer(offer: EbayOfferSummary) {
 function isPublishableOffer(offer: EbayOfferSummary) {
   const status = getOfferStatus(offer);
   return !isEndedOffer(offer) && (!status || status === "UNPUBLISHED");
-}
-
-function selectReusableOffer(offers: EbayOfferSummary[] = []) {
-  const offersWithId = offers.filter((offer) => offer.offerId && !isEndedOffer(offer));
-  return offersWithId.find(isPublishedOffer) ?? offersWithId.find(isPublishableOffer);
 }
 
 function isOfferUnavailableResponse(response: {
@@ -226,7 +224,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
     buildDraft(product, connection) {
       return buildEbayDraft(product, connection);
     },
-    async publish(product, connection) {
+    async publish(product, connection, savedReference) {
       const draft = buildEbayDraft(product, connection);
 
       if (!env.ebayClientId || !env.ebayClientSecret) {
@@ -272,6 +270,37 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         };
       }
 
+      let existingOffer: EbayOfferSummary | undefined;
+      if (savedReference) {
+        if (savedReference.channelId !== "ebay" || savedReference.environment !== env.ebayEnvironment ||
+            savedReference.marketplaceId !== String(offerPayload.marketplaceId) || savedReference.sku !== sku) {
+          return { status: "failed", message: "The saved offer belongs to a different SKU, market or environment. No changes were sent.", requiresReconciliation: true };
+        }
+        const lookup = await callEbayInventoryApi<EbayOfferSummary>(env, auth.accessToken, {
+          path: `/sell/inventory/v1/offer/${encodeURIComponent(savedReference.offerId)}`, method: "GET"
+        });
+        const offer = lookup.data;
+        if (!lookup.ok || !offer || offer.offerId !== savedReference.offerId || offer.sku !== sku ||
+            offer.marketplaceId !== String(offerPayload.marketplaceId) || offer.format !== "FIXED_PRICE" ||
+            (savedReference.listingId && offer.listing?.listingId !== savedReference.listingId) ||
+            (!isPublishedOffer(offer) && !isPublishableOffer(offer))) {
+          return { status: "failed", message: "The saved eBay offer could not be verified or is no longer active. No replacement was created. Check the listing before retrying.",
+            requiresReconciliation: true, updatedCredentials: auth.credentials };
+        }
+        existingOffer = offer;
+      } else {
+        const lookup = await callEbayInventoryApi<{ offers?: EbayOfferSummary[]; errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
+          path: `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}&marketplace_id=${encodeURIComponent(String(offerPayload.marketplaceId))}&format=FIXED_PRICE`, method: "GET"
+        });
+        if ((!lookup.ok && !isOfferUnavailableResponse(lookup)) || (lookup.ok && !Array.isArray(lookup.data?.offers))) {
+          return { status: "failed", message: formatEbayError(lookup, "eBay offer lookup failed. No changes were sent."), updatedCredentials: auth.credentials };
+        }
+        if (lookup.data?.offers?.length) {
+          return { status: "failed", message: "An eBay offer already exists for this SKU but is not linked to this product. Verify and link the existing offer before publishing; no changes were sent.",
+            requiresReconciliation: true, updatedCredentials: auth.credentials };
+        }
+      }
+
       const inventoryResponse = await callEbayInventoryApi<{ errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
         path: `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
         method: "PUT",
@@ -282,35 +311,13 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         return {
           status: "failed",
           message: formatEbayError(inventoryResponse, "eBay inventory item creation failed."),
+          requiresReconciliation: inventoryResponse.status >= 500,
           updatedCredentials: auth.credentials
         };
       }
 
-      const offerSearch = await callEbayInventoryApi<{
-        offers?: EbayOfferSummary[];
-        errors?: EbayApiErrorShape[];
-      }>(env, auth.accessToken, {
-        path:
-          `/sell/inventory/v1/offer?sku=${encodeURIComponent(sku)}` +
-          `&marketplace_id=${encodeURIComponent(String(offerPayload.marketplaceId))}` +
-          `&format=${encodeURIComponent(String(offerPayload.format))}`,
-        method: "GET"
-      });
-
-      if (!offerSearch.ok) {
-        if (!isOfferUnavailableResponse(offerSearch)) {
-          return {
-            status: "failed",
-            message: formatEbayError(offerSearch, "eBay offer lookup failed."),
-            updatedCredentials: auth.credentials
-          };
-        }
-      }
-
-      const existingOffer = selectReusableOffer(offerSearch.data?.offers);
-
       let offerId = existingOffer?.offerId;
-      let shouldCreateOffer = !offerId;
+      const shouldCreateOffer = !offerId;
 
       if (offerId) {
         const updateResponse = await callEbayInventoryApi<{ errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
@@ -320,16 +327,9 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         });
 
         if (!updateResponse.ok) {
-          if (!isOfferUnavailableResponse(updateResponse)) {
-            return {
-              status: "failed",
-              message: formatEbayError(updateResponse, "eBay offer update failed."),
-              updatedCredentials: auth.credentials
-            };
-          }
-
-          offerId = undefined;
-          shouldCreateOffer = true;
+          return { status: "failed", message: formatEbayError(updateResponse, "eBay offer update failed. No replacement was created."),
+            remoteListing: reference(offerId, existingOffer?.listing?.listingId),
+            requiresReconciliation: updateResponse.status >= 500 || isOfferUnavailableResponse(updateResponse), updatedCredentials: auth.credentials };
         }
 
         if (offerId && existingOffer && isPublishedOffer(existingOffer)) {
@@ -360,6 +360,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
           return {
             status: "failed",
             message: isOfferUnavailableResponse(createOfferResponse) ? addUnavailableOfferHint(message) : message,
+            requiresReconciliation: createOfferResponse.status >= 500 || createOfferResponse.ok,
             updatedCredentials: auth.credentials
           };
         }
@@ -400,6 +401,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
           return {
             status: "failed",
             message: isOfferUnavailableResponse(publishResponse) ? addUnavailableOfferHint(message) : message,
+            requiresReconciliation: publishResponse.status >= 500 || isOfferUnavailableResponse(publishResponse),
             remoteListing: reference(offerId!),
             updatedCredentials: auth.credentials
           };
@@ -407,6 +409,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
 
         return {
           status: publishResponse.data?.listingId ? "published" : "failed",
+          requiresReconciliation: !publishResponse.data?.listingId,
           message: publishResponse.data?.listingId
             ? `Published to eBay listing ${publishResponse.data.listingId}.`
             : "eBay did not confirm a listing ID. Check this SKU on eBay before retrying.",
@@ -417,6 +420,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         return {
           status: "failed",
           message: "eBay publication could not be confirmed. Check the saved offer before retrying.",
+          requiresReconciliation: true,
           remoteListing: reference(offerId!),
           updatedCredentials: auth.credentials
         };

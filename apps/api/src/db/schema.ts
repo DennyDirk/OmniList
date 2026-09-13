@@ -1,6 +1,6 @@
 import { integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/pg-core";
 
-import type { ProductAsset, ProductChannelOverride, ProductVariant, RemoteListingReference } from "@omnilist/shared";
+import type { ChannelId, ProductAsset, ProductChannelOverride, ProductVariant, RemoteListingReference } from "@omnilist/shared";
 
 export const workspacesTable = pgTable("workspaces", {
   id: varchar("id", { length: 64 }).primaryKey(),
@@ -117,6 +117,25 @@ export const channelConnectionsTable = pgTable("channel_connections", {
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
 });
+
+export const channelListingsTable = pgTable("channel_listings", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  channelId: varchar("channel_id", { length: 32 }).$type<ChannelId>().notNull(),
+  workspaceId: varchar("workspace_id", { length: 64 }).notNull().references(() => workspacesTable.id),
+  productId: varchar("product_id", { length: 64 }).notNull().references(() => productsTable.id),
+  connectionId: varchar("connection_id", { length: 64 }).notNull().references(() => channelConnectionsTable.id),
+  environment: varchar("environment", { length: 32 }).notNull(),
+  marketplaceId: varchar("marketplace_id", { length: 64 }).notNull(),
+  sku: varchar("sku", { length: 128 }).notNull(),
+  externalAccountId: text("external_account_id").notNull(),
+  remoteListing: jsonb("remote_listing").$type<RemoteListingReference>(),
+  status: varchar("status", { length: 32 }).$type<"pending" | "publishing" | "published" | "failed" | "needs_review">().notNull(),
+  appliedRevision: varchar("applied_revision", { length: 64 }),
+  lastPublishedAt: timestamp("last_published_at", { withTimezone: true })
+}, table => ({
+  productScope: uniqueIndex("channel_listing_product_scope").on(table.workspaceId, table.connectionId, table.environment, table.marketplaceId, table.productId),
+  skuScope: uniqueIndex("channel_listing_sku_scope").on(table.workspaceId, table.connectionId, table.environment, table.marketplaceId, table.sku)
+}));
 
 export const inventoryMovementsTable = pgTable("inventory_movements", {
   id: varchar("id", { length: 64 }).primaryKey(),
