@@ -15,7 +15,7 @@ const fields = { title: "Cotton shirt", description: "A cotton shirt in size M."
 
 test("simplified editor preserves other channels, internal metadata and every variant option", () => {
   const initial: Product = {
-    id: "p1", title: fields.title, description: fields.description, sku: fields.sku, basePrice: 20, quantity: 1,
+    id: "p1", title: fields.title, description: fields.description, sku: fields.sku, basePrice: 20, currency: "USD", quantity: 1,
     brand: "Brand", attributes: { material: "Cotton", custom: "Keep" }, categoryId: "internal", categoryLabel: "Internal label", images: [],
     variants: [{ id: "v1", sku: "v1", price: 10, quantity: 1, options: [{ name: "Size", value: "M" }, { name: "Color", value: "Black" }, { name: "Fit", value: "Slim" }] }],
     channelOverrides: { etsy: { title: "Etsy cotton shirt", aspects: { Material: ["Cotton"] } }, shopify: { price: 40 }, ebay: { categoryId: "15687" } }

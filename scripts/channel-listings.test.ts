@@ -68,3 +68,93 @@ test("an unconfirmed listing never advances the applied revision", async () => {
   await assert.rejects(repo.recordResult(identity, { status: "published", remoteListing: offerOnly, revision: "v1" }), /did not confirm/);
   assert.equal((await repo.reserve(identity)).appliedRevision, null);
 });
+
+// P0.0 Concurrency Tests
+
+test("two concurrent claim attempts for same identity → only first succeeds", async () => {
+  const repo = createChannelListingRepository();
+  const [r1, r2] = await Promise.allSettled([repo.claim(identity), repo.claim(identity)]);
+  assert.equal(r1.status, "fulfilled", "First claim succeeds");
+  assert.equal(r2.status, "rejected", "Second claim fails");
+  if (r2.status === "rejected") {
+    assert(r2.reason instanceof Error);
+    assert(r2.reason.message.includes("already") || r2.reason.message.includes("publishing"));
+  }
+});
+
+test("claim fails if previous attempt left listing in needs_review state", async () => {
+  const repo = createChannelListingRepository();
+  await repo.reserve(identity);
+  await repo.claim(identity);
+  await repo.recordResult(identity, {
+    status: "failed",
+    remoteListing,
+    revision: "v1",
+    requiresReconciliation: true
+  });
+
+  const listing = await repo.reserve(identity);
+  assert.equal(listing.status, "needs_review", "Listing in needs_review after reconciliation");
+
+  // Attempt to claim again should fail
+  await assert.rejects(repo.claim(identity), /needs_review|already/);
+});
+
+test("claim fails if status is publishing (dual lock prevention)", async () => {
+  const repo = createChannelListingRepository();
+  await repo.reserve(identity);
+  await repo.claim(identity);
+
+  // Try to claim again while status is publishing
+  await assert.rejects(repo.claim(identity), /publishing|already/);
+});
+
+test("recordResult transitions publishing → published with remote listing confirmation", async () => {
+  const repo = createChannelListingRepository();
+  await repo.reserve(identity);
+  const claimed = await repo.claim(identity);
+  assert.equal(claimed.status, "publishing", "After claim, status is publishing");
+
+  await repo.recordResult(identity, {
+    status: "published",
+    remoteListing,
+    revision: "v1"
+  });
+
+  const result = await repo.reserve(identity);
+  assert.equal(result.status, "published", "After recordResult, status is published");
+  assert.deepEqual(result.remoteListing, remoteListing);
+  assert.equal(result.appliedRevision, "v1");
+});
+
+test("recordResult with requiresReconciliation transitions publishing → needs_review", async () => {
+  const repo = createChannelListingRepository();
+  await repo.reserve(identity);
+  await repo.claim(identity);
+
+  await repo.recordResult(identity, {
+    status: "failed",
+    remoteListing,
+    revision: "v1",
+    requiresReconciliation: true
+  });
+
+  const result = await repo.reserve(identity);
+  assert.equal(result.status, "needs_review", "After reconciliation flag, status is needs_review");
+});
+
+test("concurrent claim and recordResult: recordResult on publishing status succeeds", async () => {
+  const repo = createChannelListingRepository();
+  await repo.reserve(identity);
+  await repo.claim(identity);
+
+  // recordResult should succeed even with publishing status
+  await repo.recordResult(identity, {
+    status: "published",
+    remoteListing,
+    revision: "v1"
+  });
+
+  const result = await repo.reserve(identity);
+  assert.equal(result.status, "published");
+});

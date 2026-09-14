@@ -1,7 +1,8 @@
 import { XMLParser, XMLValidator } from "fast-xml-parser";
 import { z } from "zod";
 import type { ApiEnv } from "../../../config/env";
-import { getEbayBaseUrls } from "./ebay-client";
+import { callEbayTradingRead, EbayTradingReadError } from "./ebay-trading-read";
+export { EbayTradingReadError } from "./ebay-trading-read";
 
 const count = z.string().regex(/^\d+$/).transform(Number).pipe(z.number().int().nonnegative().safe());
 const responseSchema = z.object({
@@ -18,12 +19,6 @@ const responseSchema = z.object({
     })).max(200).optional() })]).optional()
   }).optional()
 });
-
-export class EbayTradingReadError extends Error {
-  constructor(public readonly reconnect: boolean = false) {
-    super(reconnect ? "Reconnect eBay to read active listings." : "Could not read active eBay listings. Try again.");
-  }
-}
 
 export function parseActiveListings(xml: string, page: number) {
   // eBay responses do not need DTDs; reject them before any entity expansion.
@@ -63,37 +58,8 @@ export function parseActiveListings(xml: string, page: number) {
 
 export async function readEbayActiveListings(env: ApiEnv, accessToken: string, page: number) {
   if (!Number.isInteger(page) || page < 1 || page > 125) throw new EbayTradingReadError();
-  try {
-    const response = await fetch(`${getEbayBaseUrls(env.ebayEnvironment).apiBaseUrl}/ws/api.dll`, {
-      method: "POST", signal: AbortSignal.timeout(15_000), redirect: "error",
-      headers: {
-        "Content-Type": "text/xml; charset=utf-8", "X-EBAY-API-CALL-NAME": "GetMyeBaySelling",
-        "X-EBAY-API-COMPATIBILITY-LEVEL": "1477", "X-EBAY-API-SITEID": "0",
-        "X-EBAY-API-IAF-TOKEN": accessToken
-      },
-      body: `<?xml version="1.0" encoding="utf-8"?>
-<GetMyeBaySellingRequest xmlns="urn:ebay:apis:eBLBaseComponents">
-  <ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>${page}</PageNumber></Pagination></ActiveList>
-  <SoldList><Include>false</Include></SoldList><UnsoldList><Include>false</Include></UnsoldList>
-  <ScheduledList><Include>false</Include></ScheduledList>
-</GetMyeBaySellingRequest>`
-    });
-    if (!response.ok) throw new EbayTradingReadError(response.status === 401 || response.status === 403);
-    const reader = response.body?.getReader();
-    if (!reader) throw new EbayTradingReadError();
-    const chunks: Uint8Array[] = [];
-    let size = 0;
-    try {
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        size += value.byteLength;
-        if (size > 2_000_000) throw new EbayTradingReadError();
-        chunks.push(value);
-      }
-    } finally { await reader.cancel(); }
-    return parseActiveListings(Buffer.concat(chunks).toString("utf8"), page);
-  } catch (error) {
-    throw error instanceof EbayTradingReadError ? error : new EbayTradingReadError();
-  }
+  const xml = await callEbayTradingRead(env, accessToken, "GetMyeBaySelling",
+    '<ActiveList><Include>true</Include><Pagination><EntriesPerPage>200</EntriesPerPage><PageNumber>' + page + '</PageNumber></Pagination></ActiveList>' +
+    '<SoldList><Include>false</Include></SoldList><UnsoldList><Include>false</Include></UnsoldList><ScheduledList><Include>false</Include></ScheduledList>');
+  return parseActiveListings(xml, page);
 }

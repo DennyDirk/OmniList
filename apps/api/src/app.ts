@@ -19,6 +19,9 @@ import { getEnv } from "./config/env";
 import { createAuthService, extractAccessToken } from "./modules/auth/auth.service";
 import { createProductRepository } from "./modules/catalog/catalog.repository";
 import { createCatalogService } from "./modules/catalog/catalog.service";
+import { createEbayActiveCatalogService } from "./modules/catalog/ebay-active-catalog.service";
+import { createEbayRecoveryService, EbayRecoveryError } from "./modules/publishing/ebay-recovery.service";
+import { ListingOwnershipError } from "./modules/publishing/channel-listings.repository";
 import { createEbayCatalogService, EbayCatalogError } from "./modules/catalog/ebay-catalog.service";
 import { createChannelConnectionRepository } from "./modules/channels/channel-connections.repository";
 import { createChannelConnectionsService } from "./modules/channels/channel-connections.service";
@@ -28,6 +31,7 @@ import { ensureValidEbayAccessToken, getEbaySellerSetupOptions } from "./modules
 import { EbayPreparationError, getEbayCategoryRequirements } from "./modules/channels/adapters/ebay-category";
 import { searchEbayCategories } from "./modules/channels/adapters/ebay-category-search";
 import { getEbayListingStatus, getEbayOfferStatus } from "./modules/channels/adapters/ebay-listing-status";
+import { EbayTradingReadError } from "./modules/channels/adapters/ebay-active-listings";
 import { createMediaService } from "./modules/media/media.service";
 import { createInventoryRepository } from "./modules/inventory/inventory.repository";
 import { createInventoryService } from "./modules/inventory/inventory.service";
@@ -68,7 +72,10 @@ export async function buildApp() {
   const inventoryService = createInventoryService(productRepository, inventoryRepository);
   const channelConnectionsService = createChannelConnectionsService(channelConnectionRepository);
   const channelAuthService = createChannelAuthService(channelConnectionRepository, env);
-  const publishingService = createPublishingService(publishJobRepository, channelConnectionRepository, env, createChannelListingRepository(db));
+  const listingRepository = createChannelListingRepository(db);
+  const publishingService = createPublishingService(publishJobRepository, channelConnectionRepository, env, listingRepository);
+  const ebayRecoveryService = createEbayRecoveryService(channelConnectionRepository, listingRepository, env);
+  const ebayActiveCatalogService = createEbayActiveCatalogService(channelConnectionRepository, env);
   const workspaceService = createWorkspaceService(workspaceRepository, productRepository);
 
   if (db) {
@@ -475,6 +482,7 @@ export async function buildApp() {
         return reply.code(409).send({ message: "The connection changed. Check the listing again." });
       }
       await channelConnectionRepository.setCredentialsForConnection(session.workspace.id, record.connection.id, record.credentials, auth.credentials);
+
       return reply.header("Cache-Control", "private, no-store").send({ item });
     } catch (error) {
       return reply.code(502).send({ message: error instanceof EbayPreparationError ? error.message : "Could not check the offer status. Try again later." });
@@ -863,6 +871,51 @@ export async function buildApp() {
     return {
       item: draft
     };
+  });
+
+  app.post("/products/:productId/ebay-offer-repair", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    const { productId } = request.params as { productId: string };
+    const product = await catalogService.getProductById(session.workspace.id, productId);
+    if (!product) return reply.code(404).send({ message: "Product not found." });
+    try {
+      return { item: await ebayRecoveryService.recover(session.workspace.id, product) };
+    } catch (error) {
+      return reply.code(error instanceof EbayRecoveryError ? error.status : error instanceof ListingOwnershipError ? 409 : 502).send({
+        message: error instanceof EbayRecoveryError || error instanceof ListingOwnershipError ? error.message : "Could not verify the listing. No recovery was applied."
+      });
+    }
+  });
+
+  app.get("/channels/ebay/active-listings/:listingId", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    const { listingId } = request.params as { listingId: string };
+    const query = request.query as { page?: unknown; connectionId?: unknown; environment?: unknown };
+    try {
+      return { item: await ebayActiveCatalogService.details(session.workspace.id, { ...query, listingId,
+        page: query.page, connectionId: query.connectionId, environment: query.environment }) };
+    } catch (error) {
+      return reply.code(error instanceof EbayCatalogError ? error.status : error instanceof EbayTradingReadError && error.reconnect ? 409 : 502).send({
+        message: error instanceof EbayCatalogError || error instanceof EbayTradingReadError ? error.message : "Could not load listing details. Try again later."
+      });
+    }
+  });
+
+  app.get("/channels/ebay/active-listings", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    try {
+      return await ebayActiveCatalogService.list(session.workspace.id, (request.query as { page?: unknown }).page);
+    } catch (error) {
+      return reply.code(error instanceof EbayCatalogError ? error.status : error instanceof EbayTradingReadError && error.reconnect ? 409 : 502).send({
+        message: error instanceof EbayCatalogError || error instanceof EbayTradingReadError ? error.message : "Could not load active listings. Try again later."
+      });
+    }
   });
 
   return app;

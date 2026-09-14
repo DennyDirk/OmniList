@@ -9,7 +9,7 @@ import { getEbayOfferStatus } from "../apps/api/src/modules/channels/adapters/eb
 
 const env: ApiEnv = { nodeEnv: "test", port: 4000, publicApiUrl: "http://localhost:4000", publicWebUrl: "http://localhost:3000",
   ebayEnvironment: "sandbox", ebayScopes: [], supabaseStorageBucket: "images", ebayClientId: "test", ebayClientSecret: "test", ebayRedirectUriName: "test" };
-const product: Product = { id: "p", title: "Cotton shirt", description: "A cotton shirt.", sku: "SKU", basePrice: 20, quantity: 1,
+const product: Product = { id: "p", title: "Cotton shirt", description: "A cotton shirt.", sku: "SKU", basePrice: 20, currency: "USD", quantity: 1,
   images: [{ id: "i", url: "https://example.com/i.jpg" }], attributes: {}, variants: [],
   channelOverrides: { ebay: { categoryId: "15687", condition: "NEW" } } };
 const requirements: EbayCategoryRequirements = { categoryId: "15687", categoryName: "Shirts", marketplaceId: "EBAY_US",

@@ -14,10 +14,10 @@ REM The previous key was exposed in chat, so rotate it first.
 set "OMNIROUTE_KEY=sk-c37e33dbe92f5a71-b2e8b4-8d83f7ec"
 
 REM Recommended robust Kiro route.
-set "MODEL=kr/claude-haiku-4.5
+set "MODEL=kr/claude-sonnet-4.5
 
 REM If you want to force Sonnet instead, try this AFTER updating OmniRoute:
-REM set "MODEL=kr/claude-haiku-4.5
+REM set "MODEL=kr/claude-sonnet-4.5
 
 set "ANTHROPIC_BASE_URL=%OMNIROUTE_URL%"
 set "ANTHROPIC_AUTH_TOKEN=%OMNIROUTE_KEY%"

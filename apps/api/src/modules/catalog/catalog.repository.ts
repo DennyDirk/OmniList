@@ -1,8 +1,22 @@
-import { and, desc, eq } from "drizzle-orm";
-import { productUpsertInputSchema, type Product, type ProductUpsertInput } from "@omnilist/shared";
+import { and, desc, eq, count } from "drizzle-orm";
+import { productUpsertInputSchema, productSourceSchema, workspacePlans, type Product, type ProductUpsertInput } from "@omnilist/shared";
 
 import type { DbClient } from "../../db/client";
-import { productsTable } from "../../db/schema";
+import { productsTable, workspacesTable } from "../../db/schema";
+
+export class ProductWriteError extends Error { readonly statusCode = 409; }
+
+export async function lockProductCreation(db: Pick<DbClient, "select">, workspaceId: string) {
+  const [workspace] = await db.select().from(workspacesTable).where(eq(workspacesTable.id, workspaceId)).for("update");
+  if (!workspace) throw new ProductWriteError("Workspace not found.");
+  return workspace.subscriptionPlan === "pro" ? workspacePlans.pro.productLimit : workspacePlans.free.productLimit;
+}
+
+export async function checkProductLimit(db: Pick<DbClient, "select">, workspaceId: string, limit: number | null) {
+  if (limit === null) return;
+  const [usage] = await db.select({ count: count() }).from(productsTable).where(eq(productsTable.workspaceId, workspaceId));
+  if (usage.count >= limit) throw new ProductWriteError("Product limit reached. Upgrade your plan before importing or creating more products.");
+}
 
 export interface ProductRepository {
   listProducts(workspaceId: string): Promise<Product[]>;
@@ -59,8 +73,9 @@ function createMemoryProductRepository(): ProductRepository {
       if (!items.has(productId)) {
         return undefined;
       }
-
       const product = toStoredProduct(input, productId);
+      if (product.currency !== items.get(productId)!.currency) throw new ProductWriteError("Changing the product currency is not supported.");
+      product.source = items.get(productId)!.source;
       items.set(product.id, product);
       return product;
     },
@@ -70,7 +85,7 @@ function createMemoryProductRepository(): ProductRepository {
   };
 }
 
-function fromDbRow(row: typeof productsTable.$inferSelect): Product {
+export function fromDbRow(row: typeof productsTable.$inferSelect): Product {
   return {
     id: row.id,
     title: row.title,
@@ -78,6 +93,8 @@ function fromDbRow(row: typeof productsTable.$inferSelect): Product {
     brand: row.brand ?? undefined,
     sku: row.sku,
     basePrice: Number(row.basePrice),
+    currency: row.currency,
+    source: row.source ? productSourceSchema.parse(row.source) : undefined,
     quantity: Number(row.quantity),
     categoryId: row.categoryId ?? undefined,
     categoryLabel: row.categoryLabel ?? undefined,
@@ -113,8 +130,10 @@ function createDbProductRepository(db: DbClient): ProductRepository {
     },
     async createProduct(workspaceId, input, productId = crypto.randomUUID()) {
       const parsed = productUpsertInputSchema.parse(input);
-
-      await db.insert(productsTable).values({
+      await db.transaction(async tx => {
+        const limit = await lockProductCreation(tx, workspaceId);
+        await checkProductLimit(tx, workspaceId, limit);
+        await tx.insert(productsTable).values({
         id: productId,
         workspaceId,
         title: parsed.title,
@@ -122,6 +141,7 @@ function createDbProductRepository(db: DbClient): ProductRepository {
         brand: parsed.brand,
         sku: parsed.sku,
         basePrice: String(parsed.basePrice),
+        currency: parsed.currency,
         quantity: parsed.quantity,
         categoryId: parsed.categoryId,
         categoryLabel: parsed.categoryLabel,
@@ -129,6 +149,7 @@ function createDbProductRepository(db: DbClient): ProductRepository {
         attributes: parsed.attributes,
         variants: parsed.variants,
         channelOverrides: parsed.channelOverrides
+        });
       });
 
       return {
@@ -138,6 +159,8 @@ function createDbProductRepository(db: DbClient): ProductRepository {
     },
     async updateProduct(workspaceId, productId, input) {
       const parsed = productUpsertInputSchema.parse(input);
+      const [existing] = await db.select().from(productsTable).where(and(eq(productsTable.workspaceId, workspaceId), eq(productsTable.id, productId))).limit(1);
+      if (existing && existing.currency !== parsed.currency) throw new ProductWriteError("Changing the product currency is not supported.");
 
       const result = await db
         .update(productsTable)
@@ -147,6 +170,7 @@ function createDbProductRepository(db: DbClient): ProductRepository {
           brand: parsed.brand,
           sku: parsed.sku,
           basePrice: String(parsed.basePrice),
+          currency: parsed.currency,
           quantity: parsed.quantity,
           categoryId: parsed.categoryId,
           categoryLabel: parsed.categoryLabel,

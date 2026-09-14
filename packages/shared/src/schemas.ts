@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { productSourceSchema } from "./product-source";
 
 export const channelIdSchema = z.enum(["shopify", "ebay", "etsy"]);
 export const connectionStatusSchema = z.enum(["connected", "attention_required", "disconnected"]);
@@ -108,6 +109,8 @@ export const productSchema = z.object({
   brand: z.string().min(1).optional(),
   sku: z.string().min(1),
   basePrice: z.number().nonnegative(),
+  currency: z.string().refine((value): boolean => value === "USD", "Only USD products are supported in this release.").default("USD"),
+  source: productSourceSchema.optional(),
   quantity: z.number().int().nonnegative(),
   categoryId: z.string().min(1).optional(),
   categoryLabel: z.string().min(1).optional(),
@@ -118,7 +121,8 @@ export const productSchema = z.object({
 });
 
 export const productUpsertInputSchema = productSchema.omit({
-  id: true
+  id: true,
+  source: true
 });
 
 export const publishPreviewRequestSchema = z.object({

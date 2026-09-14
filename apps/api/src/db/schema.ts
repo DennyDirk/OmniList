@@ -1,6 +1,7 @@
 import { integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/pg-core";
 
-import type { ChannelId, ProductAsset, ProductChannelOverride, ProductVariant, RemoteListingReference } from "@omnilist/shared";
+import type { ChannelId, ProductAsset, ProductChannelOverride, ProductVariant, RemoteListingReference, ProductSource } from "@omnilist/shared";
+import { sql } from "drizzle-orm";
 
 export const workspacesTable = pgTable("workspaces", {
   id: varchar("id", { length: 64 }).primaryKey(),
@@ -62,6 +63,8 @@ export const productsTable = pgTable("products", {
   brand: varchar("brand", { length: 255 }),
   sku: varchar("sku", { length: 128 }).notNull(),
   basePrice: numeric("base_price", { precision: 12, scale: 2 }).notNull(),
+  currency: varchar("currency", { length: 3 }).notNull().default("USD"),
+  source: jsonb("source").$type<ProductSource>(),
   quantity: integer("quantity").notNull(),
   categoryId: varchar("category_id", { length: 255 }),
   categoryLabel: varchar("category_label", { length: 255 }),
@@ -71,7 +74,11 @@ export const productsTable = pgTable("products", {
   channelOverrides: jsonb("channel_overrides").$type<Partial<Record<"shopify" | "ebay" | "etsy", ProductChannelOverride>>>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
-});
+}, table => ({
+  sourceIdentity: uniqueIndex("product_source_identity").on(table.workspaceId,
+    sql`(${table.source}->>'channelId')`, sql`(${table.source}->>'environment')`, sql`(${table.source}->>'listingId')`)
+    .where(sql`${table.source} is not null`)
+}));
 
 export const publishJobsTable = pgTable("publish_jobs", {
   id: varchar("id", { length: 64 }).primaryKey(),

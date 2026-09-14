@@ -19,6 +19,7 @@ export function buildProductDraft(
     description: fields.description.trim(),
     sku: fields.sku.trim(),
     basePrice: fields.price.trim() ? Number(fields.price.replace(",", ".")) : NaN,
+    currency: initial?.currency ?? "USD",
     quantity: fields.quantity.trim() ? Number(fields.quantity) : NaN,
     images,
     brand: initial?.brand,

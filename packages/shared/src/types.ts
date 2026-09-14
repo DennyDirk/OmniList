@@ -1,3 +1,5 @@
+import type { ProductSource } from "./product-source";
+
 export type ChannelId = "shopify" | "ebay" | "etsy";
 
 export type ChannelKind = "store" | "marketplace";
@@ -91,6 +93,8 @@ export interface Product {
   brand?: string;
   sku: string;
   basePrice: number;
+  currency: string;
+  source?: ProductSource;
   quantity: number;
   categoryId?: string;
   categoryLabel?: string;
