@@ -16,6 +16,7 @@ function toProductUpsertInput(product: Product) {
     brand: product.brand,
     sku: product.sku,
     basePrice: product.basePrice,
+    currency: product.currency,
     quantity: product.quantity,
     categoryId: product.categoryId,
     categoryLabel: product.categoryLabel,

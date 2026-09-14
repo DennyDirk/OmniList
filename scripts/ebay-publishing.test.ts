@@ -18,7 +18,7 @@ const env: ApiEnv = {
 };
 const product: Product = {
   id: "shirt", title: "Cotton crew neck T-shirt", description: "An accurate description of a single cotton shirt with tags, size M, black, without defects.",
-  sku: "SHIRT-1", basePrice: 25, quantity: 1, brand: "Example", attributes: { color: "Black", material: "Cotton" },
+  sku: "SHIRT-1", basePrice: 25, currency: "USD", quantity: 1, brand: "Example", attributes: { color: "Black", material: "Cotton" },
   images: [{ id: "photo", url: "https://images.example/shirt.jpg" }], variants: [],
   channelOverrides: { ebay: { categoryId: "15687", condition: "NEW", aspects: { Size: ["M"], Department: ["Men"], "Size Type": ["Regular"] } } }
 };
@@ -184,10 +184,12 @@ test("a publish transport failure retains the known offer without inventing a li
 });
 
 test("credential persistence failure does not discard a known remote listing", async () => {
-  await withEbay({}, async () => {
+  await withEbay({}, async calls => {
     const jobs = createPublishJobRepository();
     const connections = connectedRepository();
-    connections.setCredentialsForConnection = async () => { throw new Error("database unavailable"); };
+    connections.setCredentialsForConnection = async () => {
+      if (calls.some(call => call.path.endsWith("/publish"))) throw new Error("database unavailable");
+    };
     const service = createPublishingService(jobs, connections, env);
     const job = await service.enqueuePublishJob({ workspaceId: "workspace", product, channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] });
     let final = await jobs.getJob("workspace", job.id);
@@ -198,6 +200,32 @@ test("credential persistence failure does not discard a known remote listing", a
     assert.equal(final?.status, "failed");
     const remote = final?.targets[0].remoteListing;
     assert.equal(remote?.channelId === "ebay" && remote.listingId, "123");
+  });
+});
+
+test("failed assessment never claims the listing or writes to eBay and permits a later retry", async () => {
+  await withEbay({}, async calls => {
+    const jobs = createPublishJobRepository();
+    const connections = connectedRepository();
+    const listings = createChannelListingRepository();
+    const persist = connections.setCredentialsForConnection;
+    connections.setCredentialsForConnection = async () => { throw new Error("database unavailable"); };
+    const service = createPublishingService(jobs, connections, env, listings);
+    async function publish() {
+      const job = await service.enqueuePublishJob({ workspaceId: "workspace", product, channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] });
+      let final = await jobs.getJob("workspace", job.id);
+      for (let i = 0; i < 100 && ["queued", "processing"].includes(final!.status); i++) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+        final = await jobs.getJob("workspace", job.id);
+      }
+      return final!;
+    }
+    assert.equal((await publish()).status, "failed");
+    assert(calls.every(call => call.method === "GET"));
+    assert.equal(await listings.get({ workspaceId: "workspace", productId: product.id, connectionId: record.connection.id,
+      channelId: "ebay", externalAccountId: "", environment: "sandbox", marketplaceId: "EBAY_US", sku: product.sku }), undefined);
+    connections.setCredentialsForConnection = persist;
+    assert.equal((await publish()).status, "completed");
   });
 });
 
@@ -256,7 +284,7 @@ test("system errors during setup are errors, never successful empty policy lists
   finally { globalThis.fetch = original; }
 });
 
-test("service persists listing ownership and blocks another product's SKU before eBay calls", async () => {
+test("service persists listing ownership and blocks another product's SKU before eBay writes", async () => {
   await withEbay({}, async calls => {
     const jobs = createPublishJobRepository();
     const listings = createChannelListingRepository();
@@ -275,7 +303,7 @@ test("service persists listing ownership and blocks another product's SKU before
     const duplicate = await publish({ ...product, id: "second-shirt" });
     assert.equal(duplicate.status, "failed");
     assert.match(duplicate.targets[0].message!, /already assigned/);
-    assert.equal(calls.length, count, "no eBay requests for a conflicting product");
+    assert(calls.slice(count).every(call => call.method === "GET"), "assessment reads are allowed, conflicting product writes are not");
     const listing = await listings.reserve({ workspaceId: "workspace", productId: product.id,
       connectionId: record.connection.id, channelId: "ebay", externalAccountId: "", environment: "sandbox", marketplaceId: "EBAY_US", sku: product.sku });
     assert.equal(listing.remoteListing?.channelId, "ebay");

@@ -1,4 +1,5 @@
 export * from "./types";
+export * from "./product-source";
 export * from "./channel-rules";
 export * from "./channel-overrides";
 export * from "./categories";

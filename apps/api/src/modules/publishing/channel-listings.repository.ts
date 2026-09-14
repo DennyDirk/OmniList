@@ -25,6 +25,8 @@ export interface ChannelListing extends ListingIdentity {
 export class ListingOwnershipError extends Error {}
 
 export interface ChannelListingRepository {
+  get(identity: ListingIdentity): Promise<ChannelListing | undefined>;
+  reconcileActive(identity: ListingIdentity, expected: RemoteListingReference, confirmed: RemoteListingReference): Promise<void>;
   reserve(identity: ListingIdentity): Promise<ChannelListing>;
   claim(identity: ListingIdentity): Promise<ChannelListing>;
   recordResult(identity: ListingIdentity, result: {
@@ -54,6 +56,41 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
   const key = (i: ListingIdentity) => JSON.stringify([scope(i), i.productId]);
 
   return {
+    async get(identity) {
+      const listing = db
+        ? (await db.select().from(table).where(productScope(identity)).limit(1))[0]
+        : memory.get(key(identity));
+      if (!listing) return undefined;
+      assertIdentity(listing, identity);
+      return structuredClone(listing);
+    },
+    async reconcileActive(identity, expected, confirmed) {
+      const listing = await this.get(identity);
+      if (!listing || listing.status !== "needs_review" || JSON.stringify(listing.remoteListing) !== JSON.stringify(expected)) {
+        throw new ListingOwnershipError("The listing changed. Verify it again before recovery.");
+      }
+      if (expected.channelId !== "ebay" || confirmed.channelId !== "ebay"
+        || expected.offerId !== confirmed.offerId || !confirmed.listingId
+        || (expected.listingId && expected.listingId !== confirmed.listingId)
+        || confirmed.environment !== identity.environment || confirmed.marketplaceId !== identity.marketplaceId
+        || confirmed.sku !== identity.sku) {
+        throw new ListingOwnershipError("The confirmed offer does not match the saved listing.");
+      }
+      // Existence is confirmed, but the remote payload's revision is not known.
+      const update = { status: "published" as const, remoteListing: confirmed, appliedRevision: null };
+      if (db) {
+        const [updated] = await db.update(table).set(update).where(and(productScope(identity),
+          eq(table.status, "needs_review"), eq(table.remoteListing, expected),
+          eq(table.externalAccountId, identity.externalAccountId), eq(table.sku, identity.sku))).returning();
+        if (!updated) throw new ListingOwnershipError("The listing changed. Verify it again before recovery.");
+      } else {
+        const current = memory.get(key(identity));
+        if (!current || current.status !== "needs_review" || JSON.stringify(current.remoteListing) !== JSON.stringify(expected)) {
+          throw new ListingOwnershipError("The listing changed. Verify it again before recovery.");
+        }
+        memory.set(key(identity), { ...current, ...update });
+      }
+    },
     async reserve(identity) {
       const initial: ChannelListing = { ...identity, id: crypto.randomUUID(), remoteListing: null,
         status: "pending", appliedRevision: null, lastPublishedAt: null };

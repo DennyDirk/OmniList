@@ -17,6 +17,7 @@
     "build:api": "npm run build --workspace @omnilist/shared && npm run build --workspace @omnilist/api",
     "typecheck": "npm run typecheck --workspaces",
     "test": "npm run build --workspace @omnilist/shared && tsx --test scripts/*.test.ts",
-    "build": "npm run build --workspaces"
+    "build": "npm run build --workspaces",
+    "test:postgres": "npm run build --workspace @omnilist/shared && tsx --test scripts/integration/*.pg.test.ts"
   }
 }

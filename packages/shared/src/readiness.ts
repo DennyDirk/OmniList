@@ -48,6 +48,13 @@ function buildFieldIssues(product: Product, channelId: ChannelId): ValidationIss
     }));
 
   const warningIssues: ValidationIssue[] = [];
+  if (channelId === "ebay" && product.source?.channelId === "ebay") {
+    warningIssues.push({ code: "source_listing_read_only", field: "source", severity: "blocking",
+      message: "This product is linked to an existing eBay listing. Managing Trading listings is not supported yet; no duplicate will be published." });
+  }
+  if (channelId === "ebay" && product.currency && product.currency !== "USD") {
+    warningIssues.push({ code: "currency_not_supported", field: "currency", severity: "blocking", message: "The eBay pilot supports USD products only. No automatic conversion is performed." });
+  }
 
   if (product.categoryId && channelId !== "ebay") {
     const internalCategory = getCategoryById(product.categoryId);

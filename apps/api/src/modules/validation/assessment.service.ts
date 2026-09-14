@@ -29,6 +29,10 @@ export class UnifiedAssessmentService {
       block("channel_not_supported", "connection", "Publishing to this channel is not available yet.");
       return finish("not_supported");
     }
+    if (product.source?.channelId === "ebay") {
+      block("source_listing_read_only", "source", "This product already has an eBay source listing. Managing it is not supported yet.");
+      return finish("not_supported");
+    }
     if (!connection || connection.connection.channelId !== channelId || connection.connection.status !== "connected") {
       block("channel_not_connected", "connection", "Connect eBay before publishing.");
       return finish("needs_attention");

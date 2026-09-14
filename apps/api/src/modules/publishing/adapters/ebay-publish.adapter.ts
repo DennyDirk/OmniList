@@ -122,6 +122,8 @@ function buildEbayDraft(product: Product, connection?: ChannelConnectionRecord):
   const condition = product.channelOverrides.ebay?.condition;
   const currency = getMetadataValue(connection, "currency", "USD");
   const missingConfiguration: string[] = [];
+  if (product.source?.channelId === "ebay") missingConfiguration.push("This product already has an eBay source listing. Trading-origin products are read-only; creating a duplicate is not allowed.");
+  if (product.currency && product.currency !== "USD") missingConfiguration.push("Product currency must be USD. Automatic currency conversion is not supported.");
 
   if (marketplaceId !== "EBAY_US" || currency !== "USD") {
     missingConfiguration.push("The first eBay publishing release supports EBAY_US with USD only.");

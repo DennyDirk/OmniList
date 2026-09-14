@@ -50,6 +50,7 @@ export const demoProducts: Product[] = [
     brand: "Northline Goods",
     sku: "NLG-BAG-001",
     basePrice: 89,
+    currency: "USD",
     quantity: 14,
     categoryId: "bags-weekender",
     categoryLabel: "Bags > Travel Bags > Weekender Bags",
@@ -99,6 +100,7 @@ export const demoProducts: Product[] = [
     description: "Hand-glazed ceramic mug for coffee and tea.",
     sku: "STU-MUG-002",
     basePrice: 24,
+    currency: "USD",
     quantity: 5,
     images: [
       {
