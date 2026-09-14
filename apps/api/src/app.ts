@@ -27,7 +27,7 @@ import { listChannels } from "./modules/channels/channels.service";
 import { ensureValidEbayAccessToken, getEbaySellerSetupOptions } from "./modules/channels/adapters/ebay-client";
 import { EbayPreparationError, getEbayCategoryRequirements } from "./modules/channels/adapters/ebay-category";
 import { searchEbayCategories } from "./modules/channels/adapters/ebay-category-search";
-import { getEbayListingStatus } from "./modules/channels/adapters/ebay-listing-status";
+import { getEbayListingStatus, getEbayOfferStatus } from "./modules/channels/adapters/ebay-listing-status";
 import { createMediaService } from "./modules/media/media.service";
 import { createInventoryRepository } from "./modules/inventory/inventory.repository";
 import { createInventoryService } from "./modules/inventory/inventory.service";
@@ -36,6 +36,7 @@ import { createChannelListingRepository } from "./modules/publishing/channel-lis
 import { buildPublishPreview } from "./modules/publishing/publishing.service";
 import { createPublishingService } from "./modules/publishing/publishing.service";
 import { validateProductAcrossChannels } from "./modules/validation/validation.service";
+import { UnifiedAssessmentService } from "./modules/validation/assessment.service";
 import { createWorkspaceRepository } from "./modules/workspace/workspace.repository";
 import { createWorkspaceService } from "./modules/workspace/workspace.service";
 
@@ -58,6 +59,7 @@ export async function buildApp() {
   const authService = createAuthService(env, workspaceRepository, db);
   const productRepository = createProductRepository(db);
   const channelConnectionRepository = createChannelConnectionRepository(db);
+  const assessmentService = new UnifiedAssessmentService(env, channelConnectionRepository);
   const publishJobRepository = createPublishJobRepository(db);
   const inventoryRepository = createInventoryRepository(db);
   const mediaService = createMediaService(env);
@@ -444,6 +446,41 @@ export async function buildApp() {
     }
   });
 
+  app.get("/products/:productId/ebay-offer-repair", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    const { productId } = request.params as { productId: string };
+    const { offerId, marketplaceId } = request.query as { offerId?: string; marketplaceId?: string };
+    if (!offerId || typeof offerId !== "string" || !offerId.trim()) {
+      return reply.code(400).send({ message: "Provide offerId to check the offer status." });
+    }
+    const product = await catalogService.getProductById(session.workspace.id, productId);
+    if (!product) return reply.code(404).send({ message: "Product not found." });
+    if (marketplaceId !== undefined && typeof marketplaceId !== "string") {
+      return reply.code(400).send({ message: "Invalid marketplace." });
+    }
+    const record = await channelConnectionRepository.getConnectionRecord(session.workspace.id, "ebay");
+    if (!record || record.connection.status !== "connected") return reply.code(409).send({ message: "Connect eBay to repair this listing." });
+    const market = record.connection.metadata.marketplaceId?.trim() || "EBAY_US";
+    if (marketplaceId && marketplaceId.trim() !== market) return reply.code(409).send({ message: "The marketplace does not match the connection." });
+    try {
+      const auth = await ensureValidEbayAccessToken(env, record.credentials);
+      const item = await getEbayOfferStatus(env, auth.accessToken, offerId.trim(), market);
+      if (item.status !== "NOT_FOUND" && item.sku !== product.sku) return reply.code(409).send({ message: "This offer belongs to a different SKU." });
+      const current = await channelConnectionRepository.getConnectionRecordById(session.workspace.id, record.connection.id);
+      if (!current || current.connection.status !== "connected"
+        || JSON.stringify(current.connection) !== JSON.stringify(record.connection)
+        || current.credentials.refreshToken !== record.credentials.refreshToken) {
+        return reply.code(409).send({ message: "The connection changed. Check the listing again." });
+      }
+      await channelConnectionRepository.setCredentialsForConnection(session.workspace.id, record.connection.id, record.credentials, auth.credentials);
+      return reply.header("Cache-Control", "private, no-store").send({ item });
+    } catch (error) {
+      return reply.code(502).send({ message: error instanceof EbayPreparationError ? error.message : "Could not check the offer status. Try again later." });
+    }
+  });
+
   app.post("/products", async (request, reply) => {
     try {
       const session = await getRequiredSession(request, reply);
@@ -528,6 +565,7 @@ export async function buildApp() {
   });
 
   app.get("/products/:productId/readiness", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
     const session = await getRequiredSession(request, reply);
     if (!session) {
       return;
@@ -545,7 +583,9 @@ export async function buildApp() {
 
     return {
       productId: product.id,
-      items: validateProductAcrossChannels(product, normalizeChannelIds(query.channels))
+      items: await Promise.all([...new Set(normalizeChannelIds(query.channels))].map(async channelId =>
+        assessmentService.assessProduct(product, channelId, channelId === "ebay"
+          ? await channelConnectionRepository.getConnectionRecord(session.workspace.id, channelId) : undefined)))
     };
   });
 
