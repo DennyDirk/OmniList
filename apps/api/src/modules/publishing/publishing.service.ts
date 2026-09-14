@@ -3,6 +3,7 @@ import {
   channels,
   getBestCategoryLabel,
   getEffectiveProductForChannel,
+  canPublishAssessment,
   type ChannelConnection,
   type ChannelId,
   type Product,
@@ -13,7 +14,8 @@ import {
 } from "@omnilist/shared";
 
 import type { PublishJobRepository } from "./publishing.repository";
-import { validateProductAcrossChannels, validateProductForChannel } from "../validation/validation.service";
+import { validateProductAcrossChannels } from "../validation/validation.service";
+import { UnifiedAssessmentService } from "../validation/assessment.service";
 import type { ChannelConnectionRecord, ChannelConnectionRepository } from "../channels/channel-connections.repository";
 import { createChannelPublishRegistry } from "./adapters/channel-publish-registry";
 import type { ApiEnv } from "../../config/env";
@@ -89,23 +91,32 @@ async function processTargets(
   targets: PublishJobTarget[]
 ): Promise<PublishJobTarget[]> {
   const registry = createChannelPublishRegistry(env);
+  const assessments = new UnifiedAssessmentService(env, channelConnectionRepository);
   return Promise.all(targets.map(async (target) => {
     let remoteListing: PublishJobTarget["remoteListing"];
     let identity: ListingIdentity | undefined;
     let claimed = false;
     let revision = "";
     try {
-      const readiness = validateProductForChannel(product, target.channelId);
-      const record = target.connectionId
+      let record = target.connectionId
         ? await channelConnectionRepository.getConnectionRecordById(workspaceId, target.connectionId) : undefined;
       const connection = record?.connection;
       if (!record || !connection || connection.workspaceId !== workspaceId || connection.channelId !== target.channelId || connection.status !== "connected") {
         return { ...target, status: "failed", message: "Channel is not connected or requires reauthorization." };
       }
-      if (readiness.status === "needs_attention") {
+      const readiness = await assessments.assessProduct(product, target.channelId, record);
+      if (!canPublishAssessment(readiness)) {
         return { ...target, status: "failed", readinessScore: readiness.score, issueCount: readiness.issues.length,
           message: readiness.issues.filter(issue => issue.severity === "blocking").map(issue => issue.message).join(" ") };
       }
+      // Assessment may refresh credentials. Read them again before publishing.
+      const refreshed = await channelConnectionRepository.getConnectionRecordById(workspaceId, connection.id);
+      if (!refreshed || refreshed.connection.status !== "connected"
+        || JSON.stringify(refreshed.connection) !== JSON.stringify(connection)
+        || refreshed.credentials.refreshToken !== record.credentials.refreshToken) {
+        return { ...target, status: "failed", message: "The connection changed during verification. Check the product again." };
+      }
+      record = refreshed;
       if (target.channelId === "ebay") {
         const draft = registry.buildDraft(product, target.channelId, record);
         const payload = draft?.payload as { offerPayload?: { sku?: string; marketplaceId?: string } } | undefined;

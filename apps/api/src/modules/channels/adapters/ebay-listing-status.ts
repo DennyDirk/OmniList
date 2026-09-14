@@ -36,6 +36,7 @@ export async function getEbayOfferStatus(env: ApiEnv, token: string, offerId: st
   const response = await callEbayInventoryApi<{
     offerId?: string;
     sku?: string;
+    marketplaceId?: string;
     status?: string;
     listing?: {
       listingId?: string;
@@ -43,7 +44,7 @@ export async function getEbayOfferStatus(env: ApiEnv, token: string, offerId: st
     };
     errors?: Array<{ errorId?: number; message?: string }>;
   }>(env, token, {
-    path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}?marketplace_id=${encodeURIComponent(marketplaceId)}`,
+    path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
     method: "GET"
   });
 
@@ -65,6 +66,9 @@ export async function getEbayOfferStatus(env: ApiEnv, token: string, offerId: st
   }
 
   const offer = response.data;
+  if (!offer || offer.offerId !== offerId || offer.marketplaceId !== marketplaceId || !offer.sku || !offer.status) {
+    throw new EbayPreparationError("eBay returned an incomplete or mismatched offer. Check the listing again.");
+  }
   const listingId = offer?.listing?.listingId;
   return {
     offerId: offer?.offerId ?? offerId,

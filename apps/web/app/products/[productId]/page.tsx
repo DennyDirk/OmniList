@@ -42,7 +42,7 @@ export default async function ProductWorkspacePage({ params }: { params: Promise
         <details><summary>{text.optional}</summary><p className="field-hint">SKU: {product.sku}</p><p className="field-hint">eBay: {product.channelOverrides.ebay?.categoryId || "-"}</p></details>
       </section>
       <div className="listing-side">
-        <PublishProductCard key={product.id + JSON.stringify(product.channelOverrides)} apiBaseUrl={getClientApiBaseUrl()} product={product} connection={connection} active={active} hasPublished={hasPublished} locale={locale} />
+        <PublishProductCard key={JSON.stringify([product, connection])} apiBaseUrl={getClientApiBaseUrl()} product={product} connection={connection} active={active} hasPublished={hasPublished} locale={locale} />
         <PublishJobHistory jobs={jobs} locale={locale} />
         {connection?.status === "connected" ? <EbayListingStatus key={product.sku + jobs[0]?.updatedAt} apiBaseUrl={getClientApiBaseUrl()} productId={product.id} locale={locale} /> : null}
       </div>
