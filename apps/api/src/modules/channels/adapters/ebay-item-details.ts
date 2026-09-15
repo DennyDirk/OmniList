@@ -20,7 +20,7 @@ const schema = z.object({
   }).optional()
 });
 
-export function parseEbayItemDetails(xml: string, listingId: string) {
+function parseEbayItemResponse(xml: string, listingId: string) {
   if (xml.length > 2_000_000 || /<!DOCTYPE|<!ENTITY/i.test(xml) || XMLValidator.validate(xml) !== true) throw new EbayTradingReadError();
   let value: unknown;
   try {
@@ -38,7 +38,7 @@ export function parseEbayItemDetails(xml: string, listingId: string) {
   if (!item || item.ItemID !== listingId) throw new EbayTradingReadError();
   const sold = item.SellingStatus.QuantitySold;
   if (sold !== undefined && item.Quantity !== undefined && sold > item.Quantity) throw new EbayTradingReadError();
-  return {
+  const details = {
     listingId: item.ItemID, sellerId: item.Seller.UserID, title: item.Title, sku: item.SKU || undefined,
     site: item.Site, listingType: item.ListingType, listingStatus: item.SellingStatus.ListingStatus,
     category: item.PrimaryCategory ? { id: item.PrimaryCategory.CategoryID, name: item.PrimaryCategory.CategoryName } : undefined,
@@ -50,6 +50,16 @@ export function parseEbayItemDetails(xml: string, listingId: string) {
     pictureCount: item.PictureDetails?.PictureURL?.length ?? 0, hasDescription: Boolean(item.Description?.trim()),
     warning: response.Ack === "Warning"
   };
+  return { details, description: item.Description, pictureUrls: item.PictureDetails?.PictureURL ?? [] };
+}
+
+export function parseEbayItemDetails(xml: string, listingId: string) {
+  return parseEbayItemResponse(xml, listingId).details;
+}
+
+export function parseEbayItemImportData(xml: string, listingId: string) {
+  const parsed = parseEbayItemResponse(xml, listingId);
+  return { ...parsed.details, description: parsed.description, pictureUrls: parsed.pictureUrls };
 }
 
 export async function readEbayItemDetails(env: ApiEnv, token: string, listingId: string) {
@@ -58,3 +68,12 @@ export async function readEbayItemDetails(env: ApiEnv, token: string, listingId:
     `<ItemID>${listingId}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
   return parseEbayItemDetails(xml, listingId);
 }
+
+export async function readEbayItemImportData(env: ApiEnv, token: string, listingId: string) {
+  if (!/^\d{1,19}$/.test(listingId)) throw new EbayTradingReadError();
+  const xml = await callEbayTradingRead(env, token, "GetItem",
+    `<ItemID>${listingId}</ItemID><DetailLevel>ReturnAll</DetailLevel><IncludeItemSpecifics>true</IncludeItemSpecifics>`);
+  return parseEbayItemImportData(xml, listingId);
+}
+
+export type EbayItemImportData = ReturnType<typeof parseEbayItemImportData>;

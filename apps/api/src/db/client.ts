@@ -1,4 +1,4 @@
-import { drizzle } from "drizzle-orm/node-postgres";
+import { drizzle, type NodePgDatabase } from "drizzle-orm/node-postgres";
 import pg from "pg";
 
 import * as schema from "./schema";
@@ -33,4 +33,4 @@ export function createDbClient(databaseUrl: string) {
   });
 }
 
-export type DbClient = ReturnType<typeof createDbClient>;
+export type DbClient = NodePgDatabase<typeof schema>;

@@ -9,6 +9,7 @@ import { productSourceSchema, productUpsertInputSchema } from "@omnilist/shared"
 import * as schema from "../../apps/api/src/db/schema";
 import { createProductRepository } from "../../apps/api/src/modules/catalog/catalog.repository";
 import { createProductImportRepository } from "../../apps/api/src/modules/catalog/product-import.repository";
+import { createChannelListingRepository, type ListingIdentity } from "../../apps/api/src/modules/publishing/channel-listings.repository";
 
 // Explicit opt-in; never fall back to the application's DATABASE_URL.
 test("PostgreSQL product import and migration contracts", { skip: !process.env.TEST_DATABASE_URL }, async t => {
@@ -41,6 +42,7 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
   const dbA = drizzle({ client: a, schema }), dbB = drizzle({ client: b, schema });
   const importerA = createProductImportRepository(dbA), importerB = createProductImportRepository(dbB);
   const native = createProductRepository(dbA);
+  const listingsA = createChannelListingRepository(dbA), listingsB = createChannelListingRepository(dbB);
   const count = async () => Number((await coordinator.query("SELECT count(*) FROM products")).rows[0].count);
   const reset = async () => {
     await coordinator.query("TRUNCATE channel_listings, products, channel_connections, workspaces CASCADE");
@@ -71,6 +73,14 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
       await results;
     }
     return results;
+  };
+  const waitUntilBlocked = async (pid: number) => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const result = await coordinator.query("SELECT cardinality(pg_blocking_pids($1)) > 0 AS waiting", [pid]);
+      if (result.rows[0].waiting) return;
+      await delay(20);
+    }
+    assert.fail(`Backend ${pid} did not wait for the workspace lock`);
   };
 
   try {
@@ -121,6 +131,60 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
       const failure = results.find(result => result.status === "rejected") as PromiseRejectedResult;
       assert.match(failure.reason.message, /limit reached/);
       assert.equal(await count(), 10);
+    });
+    await t.test("publish first prevents a concurrent import of the same eBay SKU", async () => {
+      await reset();
+      const nativeProduct = await native.createProduct("workspace", product);
+      const identity: ListingIdentity = { workspaceId: "workspace", productId: nativeProduct.id,
+        connectionId: "connection", channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US",
+        sku: product.sku, externalAccountId: "seller" };
+      const pidA = (await a.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      const pidB = (await b.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await coordinator.query("BEGIN");
+      await coordinator.query("SELECT id FROM workspaces WHERE id='workspace' FOR UPDATE");
+      const publish = listingsA.claim(identity);
+      await waitUntilBlocked(pidA);
+      const importAttempt = importerB.importProduct("workspace", input);
+      await waitUntilBlocked(pidB);
+      await coordinator.query("COMMIT");
+      assert.equal((await publish).status, "publishing");
+      await assert.rejects(importAttempt, /publication or SKU link/);
+      assert.equal(await count(), 1);
+    });
+    await t.test("import first prevents a concurrent native publish of the same eBay SKU", async () => {
+      await reset();
+      const nativeProduct = await native.createProduct("workspace", product);
+      const identity: ListingIdentity = { workspaceId: "workspace", productId: nativeProduct.id,
+        connectionId: "connection", channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US",
+        sku: product.sku, externalAccountId: "seller" };
+      const pidA = (await a.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      const pidB = (await b.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await coordinator.query("BEGIN");
+      await coordinator.query("SELECT id FROM workspaces WHERE id='workspace' FOR UPDATE");
+      const imported = importerA.importProduct("workspace", input);
+      await waitUntilBlocked(pidA);
+      const publishAttempt = listingsB.claim(identity);
+      await waitUntilBlocked(pidB);
+      await coordinator.query("COMMIT");
+      assert.equal((await imported).outcome, "imported");
+      await assert.rejects(publishAttempt, /imported from an existing listing/);
+      assert.equal(await count(), 2);
+    });
+    await t.test("claim rechecks a connection changed while it waited for the workspace lock", async () => {
+      await reset();
+      const nativeProduct = await native.createProduct("workspace", product);
+      const identity: ListingIdentity = { workspaceId: "workspace", productId: nativeProduct.id,
+        connectionId: "connection", channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US",
+        sku: product.sku, externalAccountId: "seller" };
+      const pidA = (await a.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await coordinator.query("BEGIN");
+      await coordinator.query("SELECT id FROM workspaces WHERE id='workspace' FOR UPDATE");
+      const publishAttempt = listingsA.claim(identity);
+      await waitUntilBlocked(pidA);
+      await coordinator.query("UPDATE channel_connections SET status='disconnected' WHERE id='connection'");
+      await coordinator.query("COMMIT");
+      await assert.rejects(publishAttempt, /store changed/);
+      assert.equal((await coordinator.query("SELECT count(*)::int AS n FROM channel_listings")).rows[0].n, 0);
     });
     await t.test("unique source index rejects duplicates independently of the repository", async () => {
       await reset();

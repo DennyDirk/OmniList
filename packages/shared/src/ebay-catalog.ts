@@ -27,7 +27,12 @@ export const ebayActiveListingsPageSchema = z.object({
     listingId: z.string(), title: z.string(), sku: z.string().optional(),
     listingType: z.string(),
     price: z.object({ value: z.string(), currency: z.string() }).optional(),
-    quantity: z.number().int().nonnegative().optional()
+    quantity: z.number().int().nonnegative().optional(),
+    localLink: z.object({
+      kind: z.enum(["imported", "managed"]),
+      productId: z.string().min(1),
+      productTitle: z.string().min(1)
+    }).optional()
   }))
 });
 export type EbayActiveListingsPage = z.infer<typeof ebayActiveListingsPageSchema>;
@@ -44,7 +49,13 @@ export const ebayListingDetailsSchema = z.object({
   hasVariations: z.boolean(),
   aspects: z.array(z.object({ name: z.string(), values: z.array(z.string()) })),
   pictureCount: z.number().int().nonnegative(), hasDescription: z.boolean(),
-  limitations: z.array(z.enum(["variations", "listing_type", "market", "inactive", "missing_price", "missing_quantity", "upstream_warning"])),
-  importAvailable: z.literal(false)
+  limitations: z.array(z.enum(["variations", "listing_type", "market", "inactive", "missing_sku", "missing_description", "missing_price", "missing_quantity", "upstream_warning"])),
+  importAvailable: z.boolean()
 });
 export type EbayListingDetails = z.infer<typeof ebayListingDetailsSchema>;
+
+export const ebayListingImportRequestSchema = z.object({
+  page: z.number().int().min(1).max(125),
+  connectionId: z.string().min(1),
+  environment: z.enum(["sandbox", "production"])
+}).strict();

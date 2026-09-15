@@ -3,6 +3,7 @@ import cors from "@fastify/cors";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import {
   channelConnectionUpsertInputSchema,
+  ebayListingImportRequestSchema,
   bulkPublishJobRequestSchema,
   inventoryAdjustmentInputSchema,
   publishJobRequestSchema,
@@ -17,7 +18,9 @@ import { createDbClient } from "./db/client";
 import { bootstrapDatabase } from "./db/bootstrap";
 import { getEnv } from "./config/env";
 import { createAuthService, extractAccessToken } from "./modules/auth/auth.service";
-import { createProductRepository } from "./modules/catalog/catalog.repository";
+import { createProductRepository, ProductWriteError } from "./modules/catalog/catalog.repository";
+import { createProductImportRepository } from "./modules/catalog/product-import.repository";
+import { EbayImportMappingError } from "./modules/catalog/ebay-import.mapper";
 import { createCatalogService } from "./modules/catalog/catalog.service";
 import { createEbayActiveCatalogService } from "./modules/catalog/ebay-active-catalog.service";
 import { createEbayRecoveryService, EbayRecoveryError } from "./modules/publishing/ebay-recovery.service";
@@ -62,6 +65,7 @@ export async function buildApp() {
   const workspaceRepository = createWorkspaceRepository(db);
   const authService = createAuthService(env, workspaceRepository, db);
   const productRepository = createProductRepository(db);
+  const productImportRepository = db ? createProductImportRepository(db) : undefined;
   const channelConnectionRepository = createChannelConnectionRepository(db);
   const assessmentService = new UnifiedAssessmentService(env, channelConnectionRepository);
   const publishJobRepository = createPublishJobRepository(db);
@@ -75,11 +79,18 @@ export async function buildApp() {
   const listingRepository = createChannelListingRepository(db);
   const publishingService = createPublishingService(publishJobRepository, channelConnectionRepository, env, listingRepository);
   const ebayRecoveryService = createEbayRecoveryService(channelConnectionRepository, listingRepository, env);
-  const ebayActiveCatalogService = createEbayActiveCatalogService(channelConnectionRepository, env);
+  const ebayActiveCatalogService = createEbayActiveCatalogService(channelConnectionRepository, env, productImportRepository);
   const workspaceService = createWorkspaceService(workspaceRepository, productRepository);
 
   if (db) {
     await bootstrapDatabase(db);
+    if (env.nodeEnv !== "test") {
+      queueMicrotask(() => {
+        void ebayRecoveryService.recoverInterrupted()
+          .then(outcomes => publishingService.settleInterruptedJobs(outcomes))
+          .catch(error => app.log.error({ error }, "Could not recover interrupted publish jobs"));
+      });
+    }
   }
 
   await app.register(cors, {
@@ -902,6 +913,27 @@ export async function buildApp() {
       return reply.code(error instanceof EbayCatalogError ? error.status : error instanceof EbayTradingReadError && error.reconnect ? 409 : 502).send({
         message: error instanceof EbayCatalogError || error instanceof EbayTradingReadError ? error.message : "Could not load listing details. Try again later."
       });
+    }
+  });
+
+  app.post("/channels/ebay/active-listings/:listingId/import", async (request, reply) => {
+    reply.header("Cache-Control", "private, no-store");
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    const { listingId } = request.params as { listingId: string };
+    try {
+      const body = ebayListingImportRequestSchema.parse(request.body);
+      const result = await ebayActiveCatalogService.importListing(session.workspace.id, { ...body, listingId });
+      return reply.code(result.outcome === "imported" ? 201 : 200).send({ item: result });
+    } catch (error) {
+      if (error instanceof ZodError) return reply.code(400).send({ message: "Invalid eBay import request." });
+      const status = error instanceof EbayCatalogError ? error.status
+        : error instanceof EbayImportMappingError ? error.status
+        : error instanceof ProductWriteError ? error.statusCode
+        : error instanceof EbayTradingReadError && error.reconnect ? 409 : 502;
+      const message = error instanceof EbayCatalogError || error instanceof EbayImportMappingError || error instanceof ProductWriteError
+        || error instanceof EbayTradingReadError ? error.message : "Could not import this listing. No product was created.";
+      return reply.code(status).send({ message });
     }
   });
 

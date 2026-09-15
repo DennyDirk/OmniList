@@ -137,8 +137,11 @@ export const channelListingsTable = pgTable("channel_listings", {
   externalAccountId: text("external_account_id").notNull(),
   remoteListing: jsonb("remote_listing").$type<RemoteListingReference>(),
   status: varchar("status", { length: 32 }).$type<"pending" | "publishing" | "published" | "failed" | "needs_review">().notNull(),
+  executionStage: varchar("execution_stage", { length: 32 }).$type<"claimed" | "inventory_written" | "offer_saved" | "publish_requested" | "finished">().notNull().default("claimed"),
+  attemptRevision: varchar("attempt_revision", { length: 64 }),
   appliedRevision: varchar("applied_revision", { length: 64 }),
-  lastPublishedAt: timestamp("last_published_at", { withTimezone: true })
+  lastPublishedAt: timestamp("last_published_at", { withTimezone: true }),
+  updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
 }, table => ({
   productScope: uniqueIndex("channel_listing_product_scope").on(table.workspaceId, table.connectionId, table.environment, table.marketplaceId, table.productId),
   skuScope: uniqueIndex("channel_listing_sku_scope").on(table.workspaceId, table.connectionId, table.environment, table.marketplaceId, table.sku)

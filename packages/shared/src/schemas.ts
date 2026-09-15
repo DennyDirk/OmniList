@@ -125,6 +125,11 @@ export const productUpsertInputSchema = productSchema.omit({
   source: true
 });
 
+export const productImportResultSchema = z.object({
+  product: productSchema,
+  outcome: z.enum(["imported", "existing", "managed"])
+});
+
 export const publishPreviewRequestSchema = z.object({
   channels: z.array(channelIdSchema).min(1).optional()
 });

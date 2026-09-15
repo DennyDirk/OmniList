@@ -1,8 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { ApiEnv } from "../apps/api/src/config/env";
-import { parseEbayItemDetails, readEbayItemDetails } from "../apps/api/src/modules/channels/adapters/ebay-item-details";
+import { parseEbayItemDetails, parseEbayItemImportData, readEbayItemDetails } from "../apps/api/src/modules/channels/adapters/ebay-item-details";
 import { createEbayActiveCatalogService } from "../apps/api/src/modules/catalog/ebay-active-catalog.service";
+import { ebayDescriptionToPlainText, mapEbayItemToProduct } from "../apps/api/src/modules/catalog/ebay-import.mapper";
+import type { ProductImportInput, ProductImportRepository } from "../apps/api/src/modules/catalog/product-import.repository";
 import { createChannelConnectionRepository } from "../apps/api/src/modules/channels/channel-connections.repository";
 import { ebayListingDetailsSchema } from "../packages/shared/src/ebay-catalog";
 
@@ -14,17 +16,17 @@ const itemXml = `<GetItemResponse><Ack>Success</Ack><Item><ItemID>123</ItemID><T
   <ConditionID>1000</ConditionID><ConditionDisplayName>New with tags</ConditionDisplayName>
   <Quantity>5</Quantity><SellingStatus><QuantitySold>2</QuantitySold><ListingStatus>Active</ListingStatus><CurrentPrice currencyID="USD">25.00</CurrentPrice></SellingStatus>
   <Description><![CDATA[<script>alert('unsafe')</script><p>Original description</p>]]></Description>
-  <PictureDetails><PictureURL>https://example.com/shirt.jpg</PictureURL></PictureDetails>
+  <PictureDetails><PictureURL>https://i.ebayimg.com/images/g/test/s-l1600.jpg</PictureURL></PictureDetails>
   <ItemSpecifics><NameValueList><Name>Brand</Name><Value>Example</Value></NameValueList><NameValueList><Name>Color</Name><Value>Black</Value><Value>White</Value></NameValueList></ItemSpecifics>
   </Item></GetItemResponse>`;
 const pageXml = `<GetMyeBaySellingResponse><Ack>Success</Ack><ActiveList><PaginationResult><TotalNumberOfEntries>1</TotalNumberOfEntries><TotalNumberOfPages>1</TotalNumberOfPages></PaginationResult>
   <ItemArray><Item><ItemID>123</ItemID><Title>Shirt</Title><ListingType>FixedPriceItem</ListingType></Item></ItemArray></ActiveList></GetMyeBaySellingResponse>`;
 
-async function setup() {
+async function setup(imports?: ProductImportRepository) {
   const connections = createChannelConnectionRepository();
   const connection = await connections.upsertConnection("workspace", "ebay", { status: "connected", externalAccountId: "ebay-seller", metadata: {} });
   await connections.setCredentials("workspace", "ebay", { accessToken: "secret", refreshToken: "refresh", environment: "sandbox", accessTokenExpiresAt: "2099-01-01" });
-  return { connections, service: createEbayActiveCatalogService(connections, env), input: { listingId: "123", page: "1", connectionId: connection.id, environment: "sandbox" } };
+  return { connections, service: createEbayActiveCatalogService(connections, env, imports), input: { listingId: "123", page: "1", connectionId: connection.id, environment: "sandbox" } };
 }
 async function withFetch(fn: typeof fetch, run: () => Promise<void>) {
   const previous = globalThis.fetch;
@@ -81,10 +83,54 @@ test("details validate token ownership before GetItem and return an explicit rea
     const result = ebayListingDetailsSchema.parse(await service.details("workspace", input));
     assert.deepEqual(calls, ["GetMyeBaySelling", "GetItem"]);
     assert.deepEqual(result.source, { channelId: "ebay", api: "trading", connectionId: input.connectionId, environment: "sandbox", listingId: "123", sellerId: "seller" });
-    assert.equal(result.importAvailable, false);
+    assert.equal(result.importAvailable, true);
     assert.deepEqual(result.limitations, []);
     assert(!JSON.stringify(result).includes("secret"));
   });
+});
+
+test("import rereads the owned listing and persists only the server-mapped product and source", async () => {
+  let received: ProductImportInput | undefined;
+  const imports: ProductImportRepository = { async importProduct(_workspaceId, input) {
+    received = input;
+    return { outcome: "imported", product: { id: "product", ...input.product, source: input.source } };
+  } };
+  const { service, input } = await setup(imports);
+  const calls: string[] = [];
+  await withFetch(async (_url, init) => {
+    const call = new Headers(init?.headers).get("X-EBAY-API-CALL-NAME")!;
+    calls.push(call);
+    return new Response(call === "GetMyeBaySelling" ? pageXml : itemXml);
+  }, async () => {
+    const result = await service.importListing("workspace", { ...input, page: 1 });
+    assert.equal(result.outcome, "imported");
+    assert.deepEqual(calls, ["GetMyeBaySelling", "GetItem"]);
+    assert.equal(received?.product.description, "Original description");
+    assert.equal(received?.product.brand, "Example");
+    assert.equal(received?.product.quantity, 3);
+    assert.equal(received?.product.basePrice, 25);
+    assert.equal(received?.product.images[0]?.url, "https://i.ebayimg.com/images/g/test/s-l1600.jpg");
+    assert.equal(received?.source.listingId, "123");
+    assert.equal(received?.source.currency, "USD");
+    assert(!JSON.stringify(received).includes("<script"));
+  });
+});
+
+test("import mapper strips executable HTML, decodes text and ignores non-eBay image hosts", () => {
+  const item = parseEbayItemImportData(itemXml.replace("Original description", "Cotton &amp; linen description")
+    .replace("https://i.ebayimg.com/images/g/test/s-l1600.jpg", "https://127.0.0.1/private.jpg"), "123");
+  const product = mapEbayItemToProduct(item);
+  assert.equal(product.description, "Cotton & linen description");
+  assert.deepEqual(product.images, []);
+  assert.equal(ebayDescriptionToPlainText("<style>secret</style><p>Hello&nbsp;world</p>"), "Hello world");
+});
+
+test("import mapper refuses unsupported listings instead of inventing required facts", () => {
+  const base = parseEbayItemImportData(itemXml, "123");
+  for (const item of [{ ...base, sku: undefined }, { ...base, quantity: undefined }, { ...base, description: "<script>x</script>" },
+    { ...base, listingType: "Chinese" }, { ...base, price: { value: "25.00", currency: "EUR" } }, { ...base, hasVariations: true }]) {
+    assert.throws(() => mapEbayItemToProduct(item));
+  }
 });
 
 test("details reject invalid IDs, pages, foreign workspaces and stale connection identity before fetching", async () => {

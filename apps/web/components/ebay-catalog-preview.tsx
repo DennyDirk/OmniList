@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState, useEffect } from "react";
+import Link from "next/link";
 import { ebayCatalogPageSchema, ebayActiveListingsPageSchema, type EbayCatalogPage, type EbayActiveListingsPage } from "@omnilist/shared";
 import { ebayCatalogCopy } from "../lib/ebay-catalog-copy";
 import { EbayListingDetailsPreview } from "./ebay-listing-details";
@@ -64,7 +65,7 @@ export function EbayCatalogPreview({ apiBaseUrl, locale }: {
     {error ? <p role="alert" className="banner error">{copy.error} <a href="/channels">{copy.connect}</a></p> : null}
     <div aria-live="polite">
       {activePage ? <>
-        <p><strong>{activePage.environment === "sandbox" ? "Sandbox" : "Production"}</strong> · {copy.readOnly}</p>
+        <p><strong>{activePage.environment === "sandbox" ? "Sandbox" : "Production"}</strong> · {copy.importSource}</p>
         <p>{copy.active}: {activePage.total} · {copy.page} {activePage.page}</p>
         {activePage.limited || activePage.warning ? <p role="status">{copy.partial}</p> : null}
         {activePage.items.length ? <ul className="ebay-catalog-items">
@@ -72,9 +73,13 @@ export function EbayCatalogPreview({ apiBaseUrl, locale }: {
             <a href={`https://${activePage.environment === "sandbox" ? "www.sandbox.ebay.com" : "www.ebay.com"}/itm/${encodeURIComponent(item.listingId)}`} target="_blank" rel="noopener noreferrer">{item.title}</a>
             <span className="muted">ID: {item.listingId}{item.sku ? ` · SKU: ${item.sku}` : ""}</span>
             <span>{item.price ? `${item.price.value} ${item.price.currency}` : copy.unknownPrice}</span>
+            {item.localLink ? <div className="row ebay-catalog-link">
+              <span className="pill ready">{item.localLink.kind === "managed" ? copy.managed : copy.imported}</span>
+              <Link className="text-link" href={`/products/${encodeURIComponent(item.localLink.productId)}`}>{copy.openProduct}: {item.localLink.productTitle}</Link>
+            </div> : null}
             <EbayListingDetailsPreview key={`${activePage.connectionId}:${activePage.environment}:${activePage.page}:${item.listingId}`}
               apiBaseUrl={apiBaseUrl} listingId={item.listingId} connectionId={activePage.connectionId}
-              environment={activePage.environment} page={activePage.page} locale={locale} />
+              environment={activePage.environment} page={activePage.page} locale={locale} localLink={item.localLink} />
           </li>)}
         </ul> : <p>{copy.activeEmpty}</p>}
         <nav className="ebay-catalog-pagination" aria-label={copy.page}>
