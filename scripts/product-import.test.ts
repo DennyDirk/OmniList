@@ -71,6 +71,14 @@ test("import repository inserts product and source together under workspace and 
   assert(fake.predicates.some(sql => sql.includes("source") && sql.includes("listingId") && sql.includes("environment")));
 });
 
+test("connection metadata compares values rather than JSON key order", async () => {
+  const steps = emptySteps();
+  steps[1] = { table: "channel_connections", rows: [{ ...connectionRow, metadata: { a: "first", z: "last" } }], lock: true };
+  const fake = database(steps);
+  const snapshot = { ...connection, connection: { ...connection.connection, metadata: { z: "last", a: "first" } } };
+  assert.equal((await createProductImportRepository(fake.db).importProduct("workspace", { product, source, connection: snapshot })).outcome, "imported");
+});
+
 test("repeat import returns the existing locally edited product even at the plan limit", async () => {
   const row = { ...product, id: "existing", workspaceId: "workspace", source, title: "Locally edited title" };
   const fake = database([...lockSteps(), { table: "products", rows: [row] }]);

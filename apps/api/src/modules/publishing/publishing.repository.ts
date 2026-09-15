@@ -15,6 +15,7 @@ interface CreatePublishJobInput {
 export interface PublishJobRepository {
   createJob(input: CreatePublishJobInput): Promise<PublishJob>;
   listJobs(workspaceId: string, productId?: string): Promise<PublishJob[]>;
+  listUnfinishedJobs(): Promise<PublishJob[]>;
   getJob(workspaceId: string, jobId: string): Promise<PublishJob | undefined>;
   updateJob(workspaceId: string, jobId: string, status: PublishJobStatus, targets: PublishJobTarget[]): Promise<PublishJob | undefined>;
 }
@@ -84,6 +85,10 @@ function createMemoryPublishJobRepository(): PublishJobRepository {
       const items = [...getWorkspaceJobs(workspaceId).values()];
       const filtered = productId ? items.filter((item) => item.productId === productId) : items;
       return filtered.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    },
+    async listUnfinishedJobs() {
+      return [...jobsByWorkspace.values()].flatMap(jobs => [...jobs.values()])
+        .filter(job => job.status === "queued" || job.status === "processing");
     },
     async getJob(workspaceId, jobId) {
       return getWorkspaceJobs(workspaceId).get(jobId);
@@ -193,6 +198,13 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
       );
 
       return rows.map((row) => buildJob(row, targetsByJobId.get(row.id) ?? []));
+    },
+    async listUnfinishedJobs() {
+      const rows = await db.select().from(publishJobsTable)
+        .where(inArray(publishJobsTable.status, ["queued", "processing"]))
+        .orderBy(desc(publishJobsTable.createdAt));
+      const targetsByJobId = await fetchTargetsByJobIds(db, rows.map(row => row.id));
+      return rows.map(row => buildJob(row, targetsByJobId.get(row.id) ?? []));
     },
     async getJob(workspaceId, jobId) {
       const rows = await db

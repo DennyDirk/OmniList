@@ -226,7 +226,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
     buildDraft(product, connection) {
       return buildEbayDraft(product, connection);
     },
-    async publish(product, connection, savedReference) {
+    async publish(product, connection, savedReference, execution) {
       const draft = buildEbayDraft(product, connection);
 
       if (!env.ebayClientId || !env.ebayClientSecret) {
@@ -317,6 +317,9 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
           updatedCredentials: auth.credentials
         };
       }
+      await execution?.checkpoint(existingOffer
+        ? { stage: "offer_saved", remoteListing: reference(existingOffer.offerId, existingOffer.listing?.listingId) }
+        : { stage: "inventory_written" });
 
       let offerId = existingOffer?.offerId;
       const shouldCreateOffer = !offerId;
@@ -368,9 +371,11 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         }
 
         offerId = createOfferResponse.data.offerId;
+        await execution?.checkpoint({ stage: "offer_saved", remoteListing: reference(offerId) });
       }
 
       try {
+        await execution?.checkpoint({ stage: "publish_requested", remoteListing: reference(offerId!) });
         const publishResponse = await callEbayInventoryApi<{
           listingId?: string;
           errors?: EbayApiErrorShape[];

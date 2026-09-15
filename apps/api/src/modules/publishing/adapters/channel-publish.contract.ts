@@ -9,7 +9,17 @@ export interface ChannelPublishExecutionResult {
   requiresReconciliation?: boolean;
 }
 
+export interface ChannelPublishCheckpoint {
+  stage: "inventory_written" | "offer_saved" | "publish_requested";
+  remoteListing?: RemoteListingReference;
+}
+
+export interface ChannelPublishExecution {
+  checkpoint(checkpoint: ChannelPublishCheckpoint): Promise<void>;
+}
+
 export interface ChannelPublishAdapter {
   buildDraft(product: Product, connection?: ChannelConnectionRecord): ChannelDraftPreview;
-  publish(product: Product, connection: ChannelConnectionRecord, remoteListing?: RemoteListingReference): Promise<ChannelPublishExecutionResult>;
+  publish(product: Product, connection: ChannelConnectionRecord, remoteListing?: RemoteListingReference,
+    execution?: ChannelPublishExecution): Promise<ChannelPublishExecutionResult>;
 }

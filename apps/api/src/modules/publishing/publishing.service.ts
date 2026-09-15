@@ -20,6 +20,7 @@ import type { ChannelConnectionRecord, ChannelConnectionRepository } from "../ch
 import { createChannelPublishRegistry } from "./adapters/channel-publish-registry";
 import type { ApiEnv } from "../../config/env";
 import { createChannelListingRepository, ListingOwnershipError, type ChannelListingRepository, type ListingIdentity } from "./channel-listings.repository";
+import type { EbayRecoveryOutcome } from "./ebay-recovery.service";
 
 function buildChannelTitle(product: Product, channelId: ChannelId) {
   const effectiveProduct = getEffectiveProductForChannel(product, channelId);
@@ -127,10 +128,10 @@ async function processTargets(
         identity = { workspaceId, productId: product.id, connectionId: connection.id, channelId: target.channelId,
           environment: env.ebayEnvironment, marketplaceId: payload.offerPayload.marketplaceId,
           sku: payload.offerPayload.sku, externalAccountId: connection.externalAccountId ?? "" };
-        const listing = await listings.claim(identity);
+        revision = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+        const listing = await listings.claim(identity, revision);
         claimed = true;
         remoteListing = listing.remoteListing ?? undefined;
-        revision = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
         if (!remoteListing) {
           // Historical IDs are only candidates: the adapter verifies them against eBay before writing.
           const history = await jobs.listJobs(workspaceId);
@@ -146,7 +147,12 @@ async function processTargets(
           remoteListing = candidates[0]?.remote;
         }
       }
-      const result = await registry.publish(product, target.channelId, record, remoteListing);
+      const result = await registry.publish(product, target.channelId, record, remoteListing, identity ? {
+        checkpoint: async checkpoint => {
+          remoteListing = checkpoint.remoteListing ?? remoteListing;
+          await listings.recordCheckpoint(identity!, revision, checkpoint);
+        }
+      } : undefined);
       if (!result) return { ...target, status: "failed", message: "Publishing to this channel is not implemented yet. No listing was created." };
       remoteListing = result.remoteListing ?? remoteListing;
       if (identity) {
@@ -237,6 +243,20 @@ export function createPublishingService(
       });
 
       return job;
+    },
+    async settleInterruptedJobs(outcomes: EbayRecoveryOutcome[]) {
+      const byTarget = new Map(outcomes.map(outcome => [`${outcome.productId}:${outcome.connectionId}`, outcome]));
+      for (const job of await repository.listUnfinishedJobs()) {
+        const targets = job.targets.map(target => {
+          if (target.status !== "queued" && target.status !== "processing") return target;
+          const outcome = target.connectionId ? byTarget.get(`${job.productId}:${target.connectionId}`) : undefined;
+          if (outcome?.status === "published") return { ...target, status: "published" as const,
+            message: outcome.message, remoteListing: outcome.remoteListing ?? target.remoteListing };
+          return { ...target, status: "failed" as const, remoteListing: outcome?.remoteListing ?? target.remoteListing,
+            message: outcome?.message ?? "The server stopped before this publication was confirmed. It is safe to check and retry." };
+        });
+        await repository.updateJob(job.workspaceId, job.id, calculateFinalJobStatus(targets), targets);
+      }
     },
     listJobs(workspaceId: string, productId?: string) {
       return repository.listJobs(workspaceId, productId);
