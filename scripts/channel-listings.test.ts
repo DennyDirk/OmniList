@@ -7,6 +7,18 @@ const identity: ListingIdentity = { workspaceId: "workspace", productId: "shirt"
 const remoteListing = { channelId: "ebay" as const, environment: "sandbox" as const,
   marketplaceId: "EBAY_US", sku: "SHIRT-1", offerId: "offer", listingId: "listing" };
 
+test("stale checkpoints and results cannot overwrite the current publish revision", async () => {
+  const repo = createChannelListingRepository();
+  await repo.claim(identity, "current");
+  await assert.rejects(repo.recordCheckpoint(identity, "old", { stage: "offer_saved", remoteListing }), /attempt changed/);
+  await assert.rejects(repo.recordResult(identity, { status: "published", remoteListing, revision: "old" }), /attempt changed/);
+  const listing = await repo.get(identity);
+  assert.equal(listing?.status, "publishing");
+  assert.equal(listing?.executionStage, "claimed");
+  assert.equal(listing?.remoteListing, null);
+  assert.equal(listing?.appliedRevision, null);
+});
+
 test("reservations reuse the product binding and reject SKU ownership conflicts", async () => {
   const repo = createChannelListingRepository();
   const [first, second] = await Promise.all([repo.reserve(identity), repo.reserve(identity)]);
@@ -27,9 +39,9 @@ test("reservations isolate workspaces, connections and environments", async () =
 
 test("published version survives a failed attempt and remote IDs remain independent of jobs", async () => {
   const repo = createChannelListingRepository();
-  await repo.claim(identity);
+  await repo.claim(identity, "v1");
   await repo.recordResult(identity, { status: "published", remoteListing, revision: "v1" });
-  await repo.claim(identity);
+  await repo.claim(identity, "v2");
   await repo.recordResult(identity, { status: "failed", revision: "v2" });
   const listing = await repo.reserve(identity);
   assert.deepEqual(listing.remoteListing, remoteListing);
@@ -43,7 +55,7 @@ test("published version survives a failed attempt and remote IDs remain independ
 test("unreserved results and mismatched remote identities cannot be persisted", async () => {
   const repo = createChannelListingRepository();
   await assert.rejects(repo.recordResult(identity, { status: "published", remoteListing, revision: "v1" }));
-  await repo.claim(identity);
+  await repo.claim(identity, "v1");
   for (const override of [{ sku: "OTHER" }, { marketplaceId: "EBAY_GB" }, { environment: "production" as const }]) {
     await assert.rejects(repo.recordResult(identity, { status: "published", remoteListing: { ...remoteListing, ...override }, revision: "v1" }), /does not match/);
   }
@@ -52,17 +64,17 @@ test("unreserved results and mismatched remote identities cannot be persisted", 
 
 test("a failed activation keeps the previously known listing ID for the same offer", async () => {
   const repo = createChannelListingRepository();
-  await repo.claim(identity);
+  await repo.claim(identity, "v1");
   await repo.recordResult(identity, { status: "published", remoteListing, revision: "v1" });
   const { listingId, ...offerOnly } = remoteListing;
-  await repo.claim(identity);
+  await repo.claim(identity, "v2");
   await repo.recordResult(identity, { status: "failed", remoteListing: offerOnly, revision: "v2" });
   assert.deepEqual((await repo.reserve(identity)).remoteListing, remoteListing);
 });
 
 test("an unconfirmed listing never advances the applied revision", async () => {
   const repo = createChannelListingRepository();
-  await repo.claim(identity);
+  await repo.claim(identity, "v1");
   await assert.rejects(repo.recordResult(identity, { status: "published", revision: "v1" }), /did not confirm/);
   const { listingId, ...offerOnly } = remoteListing;
   await assert.rejects(repo.recordResult(identity, { status: "published", remoteListing: offerOnly, revision: "v1" }), /did not confirm/);
@@ -85,7 +97,7 @@ test("two concurrent claim attempts for same identity → only first succeeds", 
 test("claim fails if previous attempt left listing in needs_review state", async () => {
   const repo = createChannelListingRepository();
   await repo.reserve(identity);
-  await repo.claim(identity);
+  await repo.claim(identity, "v1");
   await repo.recordResult(identity, {
     status: "failed",
     remoteListing,
@@ -112,7 +124,7 @@ test("claim fails if status is publishing (dual lock prevention)", async () => {
 test("recordResult transitions publishing → published with remote listing confirmation", async () => {
   const repo = createChannelListingRepository();
   await repo.reserve(identity);
-  const claimed = await repo.claim(identity);
+  const claimed = await repo.claim(identity, "v1");
   assert.equal(claimed.status, "publishing", "After claim, status is publishing");
 
   await repo.recordResult(identity, {
@@ -130,7 +142,7 @@ test("recordResult transitions publishing → published with remote listing conf
 test("recordResult with requiresReconciliation transitions publishing → needs_review", async () => {
   const repo = createChannelListingRepository();
   await repo.reserve(identity);
-  await repo.claim(identity);
+  await repo.claim(identity, "v1");
 
   await repo.recordResult(identity, {
     status: "failed",
@@ -146,7 +158,7 @@ test("recordResult with requiresReconciliation transitions publishing → needs_
 test("concurrent claim and recordResult: recordResult on publishing status succeeds", async () => {
   const repo = createChannelListingRepository();
   await repo.reserve(identity);
-  await repo.claim(identity);
+  await repo.claim(identity, "v1");
 
   // recordResult should succeed even with publishing status
   await repo.recordResult(identity, {

@@ -88,6 +88,7 @@ export interface ProductChannelOverride {
 
 export interface Product {
   id: string;
+  revision?: string;
   title: string;
   description: string;
   brand?: string;
@@ -163,6 +164,7 @@ export interface PublishJobTarget {
 
 export interface PublishJob {
   id: string;
+  executionId?: string;
   workspaceId: string;
   productId: string;
   productTitle: string;

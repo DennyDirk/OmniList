@@ -3,6 +3,7 @@ import { productUpsertInputSchema, productSourceSchema, workspacePlans, type Pro
 
 import type { DbClient } from "../../db/client";
 import { productsTable, workspacesTable } from "../../db/schema";
+import { withProductRevision } from "./product-revision";
 
 export class ProductWriteError extends Error { readonly statusCode = 409; }
 
@@ -23,15 +24,15 @@ export interface ProductRepository {
   countProducts(workspaceId: string): Promise<number>;
   getProductById(workspaceId: string, productId: string): Promise<Product | undefined>;
   createProduct(workspaceId: string, input: ProductUpsertInput, productId?: string): Promise<Product>;
-  updateProduct(workspaceId: string, productId: string, input: ProductUpsertInput): Promise<Product | undefined>;
+  updateProduct(workspaceId: string, productId: string, input: ProductUpsertInput, expectedRevision?: string): Promise<Product | undefined>;
   deleteProduct(workspaceId: string, productId: string): Promise<boolean>;
 }
 
 function toStoredProduct(input: ProductUpsertInput, productId: string): Product {
-  return {
+  return withProductRevision({
     id: productId,
     ...productUpsertInputSchema.parse(input)
-  };
+  });
 }
 
 function getWorkspaceItems(
@@ -54,30 +55,34 @@ function createMemoryProductRepository(): ProductRepository {
 
   return {
     async listProducts(workspaceId) {
-      return [...getWorkspaceItems(itemsByWorkspace, workspaceId).values()];
+      return structuredClone([...getWorkspaceItems(itemsByWorkspace, workspaceId).values()]);
     },
     async countProducts(workspaceId) {
       return getWorkspaceItems(itemsByWorkspace, workspaceId).size;
     },
     async getProductById(workspaceId, productId) {
-      return getWorkspaceItems(itemsByWorkspace, workspaceId).get(productId);
+      return structuredClone(getWorkspaceItems(itemsByWorkspace, workspaceId).get(productId));
     },
     async createProduct(workspaceId, input, productId = crypto.randomUUID()) {
       const product = toStoredProduct(input, productId);
       getWorkspaceItems(itemsByWorkspace, workspaceId).set(product.id, product);
-      return product;
+      return structuredClone(product);
     },
-    async updateProduct(workspaceId, productId, input) {
+    async updateProduct(workspaceId, productId, input, expectedRevision) {
       const items = getWorkspaceItems(itemsByWorkspace, workspaceId);
 
       if (!items.has(productId)) {
         return undefined;
       }
+      if (expectedRevision && items.get(productId)!.revision !== expectedRevision) {
+        throw new ProductWriteError("This product changed. Reload it before saving your changes.");
+      }
       const product = toStoredProduct(input, productId);
       if (product.currency !== items.get(productId)!.currency) throw new ProductWriteError("Changing the product currency is not supported.");
       product.source = items.get(productId)!.source;
-      items.set(product.id, product);
-      return product;
+      const updated = withProductRevision(product);
+      items.set(product.id, updated);
+      return structuredClone(updated);
     },
     async deleteProduct(workspaceId, productId) {
       return getWorkspaceItems(itemsByWorkspace, workspaceId).delete(productId);
@@ -86,7 +91,7 @@ function createMemoryProductRepository(): ProductRepository {
 }
 
 export function fromDbRow(row: typeof productsTable.$inferSelect): Product {
-  return {
+  return withProductRevision({
     id: row.id,
     title: row.title,
     description: row.description,
@@ -102,7 +107,7 @@ export function fromDbRow(row: typeof productsTable.$inferSelect): Product {
     attributes: row.attributes,
     variants: row.variants,
     channelOverrides: row.channelOverrides
-  };
+  });
 }
 
 function createDbProductRepository(db: DbClient): ProductRepository {
@@ -152,17 +157,22 @@ function createDbProductRepository(db: DbClient): ProductRepository {
         });
       });
 
-      return {
+      return withProductRevision({
         id: productId,
         ...parsed
-      };
+      });
     },
-    async updateProduct(workspaceId, productId, input) {
+    async updateProduct(workspaceId, productId, input, expectedRevision) {
       const parsed = productUpsertInputSchema.parse(input);
-      const [existing] = await db.select().from(productsTable).where(and(eq(productsTable.workspaceId, workspaceId), eq(productsTable.id, productId))).limit(1);
+      return db.transaction(async tx => {
+      const [existing] = await tx.select().from(productsTable).where(and(eq(productsTable.workspaceId, workspaceId), eq(productsTable.id, productId))).limit(1).for("update");
+      if (!existing) return undefined;
+      if (expectedRevision && fromDbRow(existing).revision !== expectedRevision) {
+        throw new ProductWriteError("This product changed. Reload it before saving your changes.");
+      }
       if (existing && existing.currency !== parsed.currency) throw new ProductWriteError("Changing the product currency is not supported.");
 
-      const result = await db
+      const result = await tx
         .update(productsTable)
         .set({
           title: parsed.title,
@@ -184,6 +194,7 @@ function createDbProductRepository(db: DbClient): ProductRepository {
         .returning();
 
       return result[0] ? fromDbRow(result[0]) : undefined;
+      });
     },
     async deleteProduct(workspaceId, productId) {
       const result = await db

@@ -104,6 +104,7 @@ export const productChannelOverridesSchema = z
 
 export const productSchema = z.object({
   id: z.string().min(1),
+  revision: z.string().regex(/^[a-f0-9]{64}$/).optional(),
   title: z.string().min(3),
   description: z.string().min(10),
   brand: z.string().min(1).optional(),
@@ -122,6 +123,7 @@ export const productSchema = z.object({
 
 export const productUpsertInputSchema = productSchema.omit({
   id: true,
+  revision: true,
   source: true
 });
 
@@ -135,6 +137,7 @@ export const publishPreviewRequestSchema = z.object({
 });
 
 export const publishJobRequestSchema = z.object({
+  productRevision: z.string().regex(/^[a-f0-9]{64}$/),
   channels: z.array(channelIdSchema).min(1).optional()
 });
 

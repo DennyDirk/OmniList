@@ -144,11 +144,13 @@ async function proxyRequest(request: NextRequest, path: string[]) {
       ).data.session
     : undefined;
   const contentType = request.headers.get("content-type");
+  const ifMatch = request.headers.get("if-match");
   const cookieHeader = request.headers.get("cookie");
 
   if (contentType) {
     requestHeaders.set("content-type", contentType);
   }
+  if (ifMatch) requestHeaders.set("if-match", ifMatch);
 
   if (cookieHeader) {
     requestHeaders.set("cookie", cookieHeader);

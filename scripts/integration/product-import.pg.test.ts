@@ -10,6 +10,7 @@ import * as schema from "../../apps/api/src/db/schema";
 import { createProductRepository } from "../../apps/api/src/modules/catalog/catalog.repository";
 import { createProductImportRepository } from "../../apps/api/src/modules/catalog/product-import.repository";
 import { createChannelListingRepository, type ListingIdentity } from "../../apps/api/src/modules/publishing/channel-listings.repository";
+import { createPublishJobRepository } from "../../apps/api/src/modules/publishing/publishing.repository";
 
 // Explicit opt-in; never fall back to the application's DATABASE_URL.
 test("PostgreSQL product import and migration contracts", { skip: !process.env.TEST_DATABASE_URL }, async t => {
@@ -109,6 +110,79 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
       assert.equal(after.source, null);
       delete after.currency; delete after.source;
       assert.deepEqual(after, before);
+    });
+    await t.test("0009 adds durable checkpoints; SQL rejects stale results and executing recovery", async () => {
+      await coordinator.query(await migration("0009_publish_recovery"));
+      await reset();
+      const item = await native.createProduct("workspace", product);
+      const identity: ListingIdentity = { workspaceId: "workspace", productId: item.id,
+        connectionId: "connection", channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US",
+        sku: product.sku, externalAccountId: "seller" };
+      const remote = { channelId: "ebay" as const, environment: "sandbox" as const,
+        marketplaceId: "EBAY_US", sku: product.sku, offerId: "saved-offer" };
+      await listingsA.claim(identity, "current");
+      await listingsA.recordCheckpoint(identity, "current", { stage: "offer_saved", remoteListing: remote });
+      assert.deepEqual((await listingsB.get(identity))?.remoteListing, remote);
+      assert.equal((await listingsB.get(identity))?.executionStage, "offer_saved");
+      await assert.rejects(listingsB.recordResult(identity, { status: "failed", revision: "old" }), /attempt changed/);
+      await assert.rejects(listingsB.reconcileActive(identity, remote, { ...remote, listingId: "123" }), /listing changed/);
+      assert.equal((await listingsA.get(identity))?.status, "publishing");
+      await listingsA.recordResult(identity, { status: "failed", revision: "current", requiresReconciliation: true });
+      const results = await Promise.allSettled([listingsA, listingsB].map(repo =>
+        repo.reconcileActive(identity, remote, { ...remote, listingId: "123" })));
+      assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+      assert.equal((await listingsA.get(identity))?.appliedRevision, null);
+    });
+    await t.test("0010 preserves legacy jobs and reads confirmed snapshots through a new repository", async () => {
+      await reset();
+      const item = await native.createProduct("workspace", product);
+      await a.query(`INSERT INTO publish_jobs (id, workspace_id, product_id, product_title, status)
+        VALUES ('legacy-job', 'workspace', $1, $2, 'processing')`, [item.id, item.title]);
+      await coordinator.query(await migration("0010_publish_job_snapshot"));
+      const writer = createPublishJobRepository(dbA);
+      const reader = createPublishJobRepository(dbB);
+      assert.equal(await reader.getJobProduct("workspace", "legacy-job"), undefined);
+      const original = (await native.getProductById("workspace", item.id))!;
+      const job = await writer.createJob({ workspaceId: "workspace", productId: item.id, productTitle: item.title,
+        productSnapshot: original, status: "queued", targets: [{ id: "snapshot-target", channelId: "ebay",
+          channelName: "eBay", connectionId: "connection", status: "queued", readinessScore: 100, issueCount: 0 }] });
+      await native.updateProduct("workspace", item.id, { ...product, title: "Changed later" }, original.revision);
+      assert.deepEqual(await reader.getJobProduct("workspace", job.id), original);
+      assert.equal(await reader.getJobProduct("other-workspace", job.id), undefined);
+      assert.equal(await reader.claimJob("other-workspace", job.id), undefined);
+      const claims = await Promise.all([writer.claimJob("workspace", job.id), reader.claimJob("workspace", job.id)]);
+      assert.equal(claims.filter(Boolean).length, 1);
+      assert.equal((await reader.getJob("workspace", job.id))?.targets[0].status, "processing");
+      assert.equal(await writer.claimJob("workspace", job.id), undefined);
+      await reader.updateJob("workspace", job.id, "failed", job.targets.map(target => ({ ...target, status: "failed" })));
+      assert.deepEqual(await writer.getJobProduct("workspace", job.id), original);
+      assert.equal("productSnapshot" in (await reader.getJob("workspace", job.id))!, false);
+    });
+    await t.test("two PostgreSQL editors cannot overwrite the same product revision", async () => {
+      await reset();
+      const existing = await native.createProduct("workspace", product);
+      const snapshot = (await native.getProductById("workspace", existing.id))!;
+      const other = createProductRepository(dbB);
+      const pidA = (await a.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      const pidB = (await b.query("SELECT pg_backend_pid() AS pid")).rows[0].pid;
+      await coordinator.query("BEGIN");
+      await coordinator.query("SELECT id FROM products WHERE id=$1 FOR UPDATE", [existing.id]);
+      const results = Promise.allSettled([
+        native.updateProduct("workspace", existing.id, { ...product, title: "First editor" }, snapshot.revision),
+        other.updateProduct("workspace", existing.id, { ...product, title: "Second editor" }, snapshot.revision)
+      ]);
+      try {
+        await waitUntilBlocked(pidA);
+        await waitUntilBlocked(pidB);
+      } finally {
+        await coordinator.query("ROLLBACK");
+      }
+      const settled = await results;
+      assert.equal(settled.filter(result => result.status === "fulfilled").length, 1);
+      assert.equal(settled.filter(result => result.status === "rejected").length, 1);
+      const current = (await native.getProductById("workspace", existing.id))!;
+      assert.notEqual(current.revision, snapshot.revision);
+      await assert.rejects(native.updateProduct("workspace", existing.id, product, snapshot.revision), /product changed/);
     });
     await t.test("parallel imports produce one product; repeat preserves local edits", async () => {
       await reset();

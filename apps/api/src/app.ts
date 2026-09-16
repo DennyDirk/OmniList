@@ -84,13 +84,6 @@ export async function buildApp() {
 
   if (db) {
     await bootstrapDatabase(db);
-    if (env.nodeEnv !== "test") {
-      queueMicrotask(() => {
-        void ebayRecoveryService.recoverInterrupted()
-          .then(outcomes => publishingService.settleInterruptedJobs(outcomes))
-          .catch(error => app.log.error({ error }, "Could not recover interrupted publish jobs"));
-      });
-    }
   }
 
   await app.register(cors, {
@@ -542,7 +535,11 @@ export async function buildApp() {
 
       const params = request.params as { productId: string };
       const input = productUpsertInputSchema.parse(request.body);
-      const product = await catalogService.updateProduct(session.workspace.id, params.productId, input);
+      const match = request.headers["if-match"];
+      if (typeof match !== "string" || !/^"[a-f0-9]{64}"$/.test(match)) {
+        return reply.code(428).send({ message: "Reload the product before saving. A current product revision is required." });
+      }
+      const product = await catalogService.updateProduct(session.workspace.id, params.productId, input, match.slice(1, -1));
 
       if (!product) {
         return reply.code(404).send({
@@ -561,6 +558,7 @@ export async function buildApp() {
         });
       }
 
+      if (error instanceof ProductWriteError) return reply.code(error.statusCode).send({ message: error.message });
       throw error;
     }
   });
@@ -602,6 +600,7 @@ export async function buildApp() {
 
     return {
       productId: product.id,
+      productRevision: product.revision,
       items: await Promise.all([...new Set(normalizeChannelIds(query.channels))].map(async channelId =>
         assessmentService.assessProduct(product, channelId, channelId === "ebay"
           ? await channelConnectionRepository.getConnectionRecord(session.workspace.id, channelId) : undefined)))
@@ -835,6 +834,7 @@ export async function buildApp() {
       const job = await publishingService.enqueuePublishJob({
         workspaceId: session.workspace.id,
         product,
+        expectedRevision: body.productRevision,
         channelIds,
         connections,
         connectionRecords: connectionRecords.filter((item): item is NonNullable<typeof item> => Boolean(item))
@@ -851,6 +851,7 @@ export async function buildApp() {
         });
       }
 
+      if (error instanceof ProductWriteError) return reply.code(error.statusCode).send({ message: error.message });
       throw error;
     }
   });

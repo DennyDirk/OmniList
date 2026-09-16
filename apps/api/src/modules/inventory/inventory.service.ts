@@ -84,7 +84,7 @@ export function createInventoryService(productRepository: ProductRepository, inv
             .reduce((sum, quantity) => sum + quantity, 0)
         };
 
-        const updatedProduct = await productRepository.updateProduct(workspaceId, productId, toProductUpsertInput(nextProduct));
+        const updatedProduct = await productRepository.updateProduct(workspaceId, productId, toProductUpsertInput(nextProduct), product.revision);
 
         if (!updatedProduct) {
           return { kind: "not_found" as const };
@@ -121,7 +121,7 @@ export function createInventoryService(productRepository: ProductRepository, inv
         variants: product.variants
       };
 
-      const updatedProduct = await productRepository.updateProduct(workspaceId, productId, toProductUpsertInput(nextProduct));
+      const updatedProduct = await productRepository.updateProduct(workspaceId, productId, toProductUpsertInput(nextProduct), product.revision);
 
       if (!updatedProduct) {
         return { kind: "not_found" as const };
