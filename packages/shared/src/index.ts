@@ -10,3 +10,4 @@ export * from "./ebay-listing";
 export * from "./readiness";
 export * from "./ebay-catalog";
 export * from "./assessment";
+export * from "./ebay-recovery";

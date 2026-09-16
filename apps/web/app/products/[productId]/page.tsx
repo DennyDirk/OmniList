@@ -6,6 +6,7 @@ import { PublishProductCard } from "../../../components/publish-product-card";
 import { PublishJobRefresh } from "../../../components/publish-job-refresh";
 import { PublishJobHistory } from "../../../components/publish-job-history";
 import { EbayListingStatus } from "../../../components/ebay-listing-status";
+import { EbayPublicationRecovery } from "../../../components/ebay-publication-recovery";
 import { requireAuthSession } from "../../../lib/auth";
 import { getChannelConnections, getClientApiBaseUrl, getProduct, getProductInventory, getProductPublishJobs } from "../../../lib/api";
 import { getI18n } from "../../../lib/i18n.server";
@@ -44,6 +45,8 @@ export default async function ProductWorkspacePage({ params }: { params: Promise
       <div className="listing-side">
         <PublishProductCard key={JSON.stringify([product, connection])} apiBaseUrl={getClientApiBaseUrl()} product={product} connection={connection} active={active} hasPublished={hasPublished} locale={locale} />
         <PublishJobHistory jobs={jobs} locale={locale} />
+        {!active && connection?.status === "connected" && jobs.some(job => job.targets.some(target => target.channelId === "ebay" && target.status === "failed")) ?
+          <EbayPublicationRecovery key={JSON.stringify([product.id, connection, jobs[0]?.updatedAt])} apiBaseUrl={getClientApiBaseUrl()} productId={product.id} connectionId={connection.id} locale={locale} /> : null}
         {connection?.status === "connected" ? <EbayListingStatus key={product.sku + jobs[0]?.updatedAt} apiBaseUrl={getClientApiBaseUrl()} productId={product.id} locale={locale} /> : null}
       </div>
     </div>

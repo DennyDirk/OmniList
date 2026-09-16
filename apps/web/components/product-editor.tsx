@@ -2,9 +2,10 @@
 
 import { useRouter } from "next/navigation";
 import { useRef, useState, useTransition, type ChangeEvent, type FormEvent } from "react";
-import { productUpsertInputSchema, buildEbayAspects, type Product, type ProductAsset } from "@omnilist/shared";
+import { productUpsertInputSchema, productSchema, buildEbayAspects, type Product, type ProductAsset } from "@omnilist/shared";
 import { dictionaries, type Locale } from "../lib/i18n";
 import { publishCopy } from "../lib/publish-copy";
+import { publishFlowCopy } from "../lib/publish-flow-copy";
 import { buildProductDraft, type ProductDraftFields } from "../lib/product-draft";
 import { useFlash } from "./flash-provider";
 import { EbayProductFields, type EbayProductDetails } from "./ebay-product-fields";
@@ -18,8 +19,8 @@ function readImage(file: File): Promise<string> {
   });
 }
 
-export function ProductEditor({ apiBaseUrl, initialProduct, locale }: {
-  apiBaseUrl: string; initialProduct?: Product; locale: Locale;
+export function ProductEditor({ apiBaseUrl, initialProduct, locale, onSaved, onCancel }: {
+  apiBaseUrl: string; initialProduct?: Product; locale: Locale; onSaved?: (product: Product) => void; onCancel?: () => void;
 }) {
   const router = useRouter();
   const { showFlash } = useFlash();
@@ -31,6 +32,7 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: {
   const lock = useRef(false);
   const generatedSku = useRef("");
   const [error, setError] = useState("");
+  const [conflict, setConflict] = useState(false);
   const [fieldErrors, setFieldErrors] = useState<Record<string, string[] | undefined>>({});
   const [form, setForm] = useState<ProductDraftFields>(() => ({
     title: initialProduct?.title ?? "", description: initialProduct?.description ?? "",
@@ -73,7 +75,7 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: {
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (lock.current || readingImages) return;
+    if (lock.current || readingImages || conflict) return;
     setError("");
     setFieldErrors({});
     generatedSku.current ||= crypto.randomUUID();
@@ -98,14 +100,25 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: {
     try {
       const response = await fetch(apiBaseUrl + "/products" + (initialProduct ? "/" + initialProduct.id : ""), {
         method: initialProduct ? "PUT" : "POST", credentials: "include",
-        headers: { "Content-Type": "application/json" }, body: JSON.stringify(parsed.data)
+        headers: { "Content-Type": "application/json", ...(initialProduct?.revision ? { "If-Match": `"${initialProduct.revision}"` } : {}) }, body: JSON.stringify(parsed.data)
       });
       const body = await response.json().catch(() => undefined) as { item?: Product; message?: string; issues?: { fieldErrors?: Record<string, string[]> } } | undefined;
       if (!response.ok || !body?.item) {
+        if (response.status === 409 || response.status === 428) {
+          setConflict(true);
+          throw new Error(locale === "ru" ? "Товар изменился или форма устарела. Ваши правки остаются в форме. Сохраните нужный текст перед перезагрузкой страницы, затем сравните с актуальным товаром."
+            : locale === "uk" ? "Товар змінився або форма застаріла. Ваші зміни залишаються у формі. Збережіть потрібний текст перед перезавантаженням сторінки та порівняйте з актуальним товаром."
+            : "The product changed or this form is outdated. Your edits remain in the form. Keep any text you need before reloading, then compare it with the current product.");
+        }
         setFieldErrors(body?.issues?.fieldErrors ?? {});
         throw new Error(body?.message || dictionary.productEditor.couldNotSaveProduct);
       }
-      const id = body.item.id;
+      const saved = productSchema.safeParse(body.item);
+      if (!saved.success || (initialProduct && saved.data.id !== initialProduct.id)) {
+        throw new Error(dictionary.productEditor.couldNotSaveProduct);
+      }
+      if (onSaved) { onSaved(saved.data); return; }
+      const id = saved.data.id;
       startTransition(() => { router.push(`/products/${id}`); router.refresh(); });
     } catch (err) {
       setError(err instanceof Error ? err.message : dictionary.productEditor.couldNotSaveProduct);
@@ -165,7 +178,8 @@ export function ProductEditor({ apiBaseUrl, initialProduct, locale }: {
     {error ? <p role="alert" className="issue blocking">{error}</p> : null}
     <footer className="listing-save">
       <span className="field-hint">{text.draftHint}</span>
-      <button className="button-primary" type="submit" disabled={busy || readingImages}>{busy ? text.saving : text.save}</button>
+      {onCancel ? <button className="button-secondary" type="button" disabled={busy || readingImages} onClick={onCancel}>{publishFlowCopy[locale].cancel}</button> : null}
+      <button className="button-primary" type="submit" disabled={busy || readingImages || conflict}>{busy ? text.saving : text.save}</button>
     </footer>
   </form>;
 }

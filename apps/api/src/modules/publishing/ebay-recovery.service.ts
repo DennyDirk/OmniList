@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { ApiEnv } from "../../config/env";
 import type { ChannelConnectionRecord, ChannelConnectionRepository } from "../channels/channel-connections.repository";
 import { ensureValidEbayAccessToken } from "../channels/adapters/ebay-client";
-import { getEbayListingStatus, getEbayOfferStatus } from "../channels/adapters/ebay-listing-status";
+import { getEbayOfferStatus } from "../channels/adapters/ebay-listing-status";
 import type { RemoteListingReference } from "@omnilist/shared";
 import type { ChannelListing, ChannelListingRepository, ListingIdentity } from "./channel-listings.repository";
 
@@ -18,6 +18,7 @@ export interface EbayRecoveryOutcome {
   listingId?: string;
   url?: string;
   remoteListing?: RemoteListingReference;
+  revisionVerified?: false;
 }
 
 function identityOf(listing: ChannelListing): ListingIdentity {
@@ -46,8 +47,8 @@ export function createEbayRecoveryService(connections: ChannelConnectionReposito
   }
 
   async function recoverListing(candidate: ChannelListing): Promise<EbayRecoveryOutcome> {
-    const listing = await listings.prepareRecovery(candidate);
-    if (!listing) throw new EbayRecoveryError(409, "This publication is no longer waiting for recovery.");
+    const listing = await listings.get(identityOf(candidate));
+    if (!listing || listing.status !== "needs_review") throw new EbayRecoveryError(409, "No stopped publication is available for safe recovery.");
     if (listing.channelId !== "ebay") throw new EbayRecoveryError(409, "Only eBay publication recovery is available.");
     const identity = identityOf(listing);
     const found = await connections.getConnectionRecordById(listing.workspaceId, listing.connectionId);
@@ -63,41 +64,23 @@ export function createEbayRecoveryService(connections: ChannelConnectionReposito
         message: "eBay could not be authorized. Reconnect the account before recovery." };
     }
 
-    let saved = listing.remoteListing;
+    const saved = listing.remoteListing;
+    if (!saved) throw new EbayRecoveryError(409, "No saved offer is available for safe recovery.");
     try {
-      if (!saved) {
-        const status = await getEbayListingStatus(env, auth.accessToken, listing.sku, listing.marketplaceId);
-        if (status.offers.length === 0) {
-          await listings.markRetryable(identity);
-          await saveCredentials(record, auth.credentials);
-          return { productId: listing.productId, connectionId: listing.connectionId, status: "retryable",
-            message: "eBay has no offer for this SKU. The interrupted attempt is safe to retry." };
-        }
-        if (status.offers.length !== 1) {
-          return { productId: listing.productId, connectionId: listing.connectionId, status: "needs_review",
-            message: "More than one eBay offer matches this SKU. Choose the correct offer in eBay before retrying." };
-        }
-        const offer = status.offers[0];
-        saved = { channelId: "ebay", environment: listing.environment as "sandbox" | "production",
-          marketplaceId: listing.marketplaceId, sku: listing.sku, offerId: offer.offerId,
-          ...(offer.listingId ? { listingId: offer.listingId } : {}) };
-        await listings.adoptOffer(identity, saved);
-      }
-
       if (saved.channelId !== "ebay" || !saved.offerId) {
         throw new EbayRecoveryError(409, "The saved publication reference is not an eBay offer.");
       }
       const offer = await getEbayOfferStatus(env, auth.accessToken, saved.offerId, listing.marketplaceId);
       await saveCredentials(record, auth.credentials);
       if (offer.sku !== listing.sku || offer.marketplaceId !== listing.marketplaceId
-        || (saved.listingId && offer.listingId && saved.listingId !== offer.listingId)) {
+        || (saved.listingId && saved.listingId !== offer.listingId)) {
         return { productId: listing.productId, connectionId: listing.connectionId, status: "needs_review",
           message: "The recovered eBay offer does not match the saved product. No retry was enabled." };
       }
       if (offer.status === "PUBLISHED" && offer.listingStatus === "ACTIVE" && offer.listingId) {
         await listings.reconcileActive(identity, saved, { ...saved, listingId: offer.listingId });
         return { productId: listing.productId, connectionId: listing.connectionId, status: "published",
-          listingId: offer.listingId, url: offer.url, remoteListing: { ...saved, listingId: offer.listingId },
+          listingId: offer.listingId, url: offer.url, revisionVerified: false, remoteListing: { ...saved, listingId: offer.listingId },
           message: `Recovered active eBay listing ${offer.listingId}.` };
       }
       if (offer.status === "UNPUBLISHED" && !offer.listingId) {
@@ -123,15 +106,17 @@ export function createEbayRecoveryService(connections: ChannelConnectionReposito
         marketplaceId: found.connection.metadata.marketplaceId?.trim() || "EBAY_US",
         externalAccountId: found.connection.externalAccountId ?? "" };
       const listing = await listings.get(identity);
-      if (!listing || !["publishing", "needs_review"].includes(listing.status)) {
-        throw new EbayRecoveryError(409, "No interrupted eBay publication is available for recovery.");
+      if (!listing || listing.status !== "needs_review" || !listing.remoteListing) {
+        throw new EbayRecoveryError(409, "No saved offer is available for safe recovery.");
       }
-      return recoverListing(listing);
+      const outcome = await recoverListing(listing);
+      if (outcome.status === "needs_review") throw new EbayRecoveryError(409, outcome.message);
+      return outcome;
     },
     async recoverInterrupted() {
       const outcomes: EbayRecoveryOutcome[] = [];
       for (const listing of await listings.listInterrupted()) {
-        if (listing.channelId !== "ebay") continue;
+        if (listing.channelId !== "ebay" || listing.status !== "needs_review") continue;
         try { outcomes.push(await recoverListing(listing)); }
         catch (error) {
           outcomes.push({ productId: listing.productId, connectionId: listing.connectionId, status: "needs_review",

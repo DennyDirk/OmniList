@@ -1,4 +1,4 @@
-import type { PublishJob } from "@omnilist/shared";
+import { getEbayListingUrl, type PublishJob } from "@omnilist/shared";
 import { dictionaries, formatDateTime, formatPublishJobStatus, formatPublishTargetStatus, type Locale } from "../lib/i18n";
 import { publishCopy } from "../lib/publish-copy";
 
@@ -10,7 +10,12 @@ export function PublishJobHistory({ jobs, locale }: { jobs: PublishJob[]; locale
     return <article className="list-item" key={job.id}>
       <div className="row"><strong>{job.productTitle}</strong><span className={"pill " + (job.status === "completed" ? "ready" : job.status === "failed" ? "attention" : "")}>{formatPublishJobStatus(dictionary, job.status)}</span></div>
       <p className="field-hint">{formatDateTime(job.createdAt, locale)}</p>
-      {job.targets.map(target => <div key={target.id}><div className="row"><strong>{target.channelName}</strong>{job.targets.length > 1 ? <span className="pill">{formatPublishTargetStatus(dictionary, target.status)}</span> : null}</div><p className="listing-result-message">{target.message}</p></div>)}
+      {job.targets.map(target => {
+        const url = target.status === "published" ? getEbayListingUrl(target.remoteListing) : undefined;
+        return <div key={target.id}><div className="row"><strong>{target.channelName}</strong>{job.targets.length > 1 ? <span className="pill">{formatPublishTargetStatus(dictionary, target.status)}</span> : null}</div><p className="listing-result-message">{target.message}</p>
+          {url ? <a className="text-link" href={url} target="_blank" rel="noreferrer">{locale === "ru" ? "Открыть объявление" : locale === "uk" ? "Відкрити оголошення" : "Open listing"}</a> : null}
+        </div>;
+      })}
     </article>;
   }
   return <section className="card listing-history">

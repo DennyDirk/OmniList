@@ -30,6 +30,38 @@ async function withFetch(fn: typeof fetch, run: () => Promise<void>) {
 }
 const product = { id: "shirt", sku: "SHIRT" };
 
+test("recovery makes only the saved unpublished offer retryable and preserves its identity", async () => {
+  const { listings, identity, service } = await setup();
+  await listings.claim(identity, "draft-1");
+  await listings.recordResult(identity, { status: "failed", remoteListing: remote, revision: "draft-1", requiresReconciliation: true });
+  await withFetch(async (url, init) => {
+    assert.equal(String(url), "https://api.sandbox.ebay.com/sell/inventory/v1/offer/offer");
+    assert.equal(init?.method, "GET");
+    return Response.json({ ...active, status: "UNPUBLISHED", listing: undefined });
+  }, async () => {
+    const outcome = await service.recover("workspace", product);
+    assert.equal(outcome.status, "retryable");
+    assert.equal((await listings.get(identity))?.status, "failed");
+    const claimed = await listings.claim(identity, "draft-2");
+    assert.deepEqual(claimed.remoteListing, remote);
+    assert.equal(claimed.attemptRevision, "draft-2");
+  });
+});
+
+test("background recovery cannot unlock a publishing entry even with a saved offer", async () => {
+  const { listings, identity, service } = await setup();
+  await listings.claim(identity, "draft-1");
+  await listings.recordCheckpoint(identity, "draft-1", { stage: "offer_saved", remoteListing: remote });
+  await withFetch(async () => { assert.fail("An executing publication must not be recovered"); }, async () => {
+    assert.deepEqual(await service.recoverInterrupted(), []);
+    await assert.rejects(service.recover("workspace", product), /safe recovery/);
+    const current = await listings.get(identity);
+    assert.equal(current?.status, "publishing");
+    assert.equal(current?.executionStage, "offer_saved");
+    assert.deepEqual(current?.remoteListing, remote);
+  });
+});
+
 test("recovery confirms only a saved active offer without asserting a payload revision", async () => {
   const { listings, identity, service } = await setup();
   await listings.claim(identity);

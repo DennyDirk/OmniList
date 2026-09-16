@@ -31,8 +31,6 @@ export class ListingOwnershipError extends Error {}
 export interface ChannelListingRepository {
   get(identity: ListingIdentity): Promise<ChannelListing | undefined>;
   reconcileActive(identity: ListingIdentity, expected: RemoteListingReference, confirmed: RemoteListingReference): Promise<void>;
-  prepareRecovery(listing: ChannelListing): Promise<ChannelListing | undefined>;
-  adoptOffer(identity: ListingIdentity, remoteListing: RemoteListingReference): Promise<ChannelListing>;
   markRetryable(identity: ListingIdentity, expected?: RemoteListingReference): Promise<void>;
   listInterrupted(): Promise<ChannelListing[]>;
   reserve(identity: ListingIdentity): Promise<ChannelListing>;
@@ -78,7 +76,7 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
     },
     async reconcileActive(identity, expected, confirmed) {
       const listing = await this.get(identity);
-      if (!listing || !["publishing", "needs_review"].includes(listing.status) || !isDeepStrictEqual(listing.remoteListing, expected)) {
+      if (!listing || listing.status !== "needs_review" || !isDeepStrictEqual(listing.remoteListing, expected)) {
         throw new ListingOwnershipError("The listing changed. Verify it again before recovery.");
       }
       if (expected.channelId !== "ebay" || confirmed.channelId !== "ebay"
@@ -93,55 +91,16 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
         remoteListing: confirmed, appliedRevision: null, lastPublishedAt: new Date(), updatedAt: new Date() };
       if (db) {
         const [updated] = await db.update(table).set(update).where(and(productScope(identity),
-          inArray(table.status, ["publishing", "needs_review"]), eq(table.remoteListing, expected),
+          eq(table.status, "needs_review"), eq(table.remoteListing, expected),
           eq(table.externalAccountId, identity.externalAccountId), eq(table.sku, identity.sku))).returning();
         if (!updated) throw new ListingOwnershipError("The listing changed. Verify it again before recovery.");
       } else {
         const current = memory.get(key(identity));
-        if (!current || !["publishing", "needs_review"].includes(current.status) || !isDeepStrictEqual(current.remoteListing, expected)) {
+        if (!current || current.status !== "needs_review" || !isDeepStrictEqual(current.remoteListing, expected)) {
           throw new ListingOwnershipError("The listing changed. Verify it again before recovery.");
         }
         memory.set(key(identity), { ...current, ...update });
       }
-    },
-    async prepareRecovery(listing) {
-      const identity: ListingIdentity = listing;
-      const current = await this.get(identity);
-      if (!current || !["publishing", "needs_review"].includes(current.status)) return undefined;
-      if (current.status === "needs_review") return current;
-      const update = { status: "needs_review" as const, updatedAt: new Date() };
-      if (db) {
-        const [updated] = await db.update(table).set(update).where(and(productScope(identity),
-          eq(table.status, "publishing"), eq(table.externalAccountId, listing.externalAccountId),
-          eq(table.sku, listing.sku))).returning();
-        return updated ? structuredClone(updated) : undefined;
-      }
-      const stored = memory.get(key(identity));
-      if (!stored || stored.status !== "publishing") return undefined;
-      const next = { ...stored, ...update };
-      memory.set(key(identity), next);
-      return structuredClone(next);
-    },
-    async adoptOffer(identity, remoteListing) {
-      if (remoteListing.channelId !== "ebay" || remoteListing.environment !== identity.environment
-        || remoteListing.marketplaceId !== identity.marketplaceId || remoteListing.sku !== identity.sku) {
-        throw new ListingOwnershipError("The recovered offer does not match the reserved listing.");
-      }
-      const update = { remoteListing, executionStage: "offer_saved" as const, updatedAt: new Date() };
-      if (db) {
-        const [updated] = await db.update(table).set(update).where(and(productScope(identity),
-          eq(table.status, "needs_review"), isNull(table.remoteListing),
-          eq(table.externalAccountId, identity.externalAccountId), eq(table.sku, identity.sku))).returning();
-        if (!updated) throw new ListingOwnershipError("The listing changed while recovering its offer.");
-        return structuredClone(updated);
-      }
-      const current = memory.get(key(identity));
-      if (!current || current.status !== "needs_review" || current.remoteListing) {
-        throw new ListingOwnershipError("The listing changed while recovering its offer.");
-      }
-      const next = { ...current, ...update };
-      memory.set(key(identity), next);
-      return structuredClone(next);
     },
     async markRetryable(identity, expected) {
       const update = { status: "failed" as const, executionStage: "finished" as const, updatedAt: new Date() };
@@ -261,6 +220,9 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
         : memory.get(key(identity));
       assertIdentity(listing, identity);
       if (listing.status !== "publishing") throw new ListingOwnershipError("The listing is not claimed for publication.");
+      if (listing.attemptRevision !== result.revision) {
+        throw new ListingOwnershipError("The publish attempt changed before its result was saved.");
+      }
       const remote = result.remoteListing;
       if (remote && (remote.channelId !== identity.channelId || (remote.channelId === "ebay" &&
           (remote.environment !== identity.environment || remote.marketplaceId !== identity.marketplaceId || remote.sku !== identity.sku)))) {

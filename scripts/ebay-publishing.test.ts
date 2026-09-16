@@ -10,6 +10,8 @@ import { buildPublishPreview, createPublishingService } from "../apps/api/src/mo
 import { createPublishJobRepository } from "../apps/api/src/modules/publishing/publishing.repository";
 import { createChannelListingRepository } from "../apps/api/src/modules/publishing/channel-listings.repository";
 import type { ApiEnv } from "../apps/api/src/config/env";
+import { withProductRevision } from "../apps/api/src/modules/catalog/product-revision";
+import { publishJobRequestSchema } from "@omnilist/shared";
 
 const env: ApiEnv = {
   nodeEnv: "test", port: 4000, publicApiUrl: "http://localhost:4000", publicWebUrl: "http://localhost:3000",
@@ -84,6 +86,63 @@ async function withEbay(options: Options, run: (calls: Call[]) => Promise<void>)
   try { await run(calls); } finally { globalThis.fetch = original; }
 }
 
+test("single publish requires a revision and rejects an outdated preview before queuing", async () => {
+  assert.equal(publishJobRequestSchema.safeParse({ channels: ["ebay"] }).success, false);
+  assert.equal(publishJobRequestSchema.safeParse({ productRevision: "old", channels: ["ebay"] }).success, false);
+  await withEbay({}, async calls => {
+    const jobs = createPublishJobRepository();
+    const service = createPublishingService(jobs, connectedRepository(), env);
+    const previous = withProductRevision(product);
+    const changed = withProductRevision({ ...product, basePrice: 30 });
+    await assert.rejects(service.enqueuePublishJob({ workspaceId: "workspace", product: changed,
+      expectedRevision: previous.revision, channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] }), /changed after preview/);
+    assert.deepEqual(await jobs.listJobs("workspace"), []);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("a missing persisted snapshot fails the job before any eBay request", async () => {
+  await withEbay({}, async calls => {
+    const jobs = createPublishJobRepository();
+    jobs.getJobProduct = async () => undefined;
+    const service = createPublishingService(jobs, connectedRepository(), env);
+    const job = await service.enqueuePublishJob({ workspaceId: "workspace", product,
+      channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] });
+    let final = await jobs.getJob("workspace", job.id);
+    for (let i = 0; i < 100 && ["queued", "processing"].includes(final!.status); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      final = await jobs.getJob("workspace", job.id);
+    }
+    assert.equal(final?.status, "failed");
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("accepted publication retains its confirmed product snapshot", async () => {
+  await withEbay({}, async calls => {
+    const jobs = createPublishJobRepository();
+    const original = withProductRevision(structuredClone(product));
+    const create = jobs.createJob.bind(jobs);
+    jobs.createJob = async input => {
+      original.title = "Later edit must not be published";
+      original.channelOverrides.ebay!.aspects!.Size = ["XL"];
+      return create(input);
+    };
+    const service = createPublishingService(jobs, connectedRepository(), env);
+    const job = await service.enqueuePublishJob({ workspaceId: "workspace", product: original,
+      expectedRevision: original.revision, channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] });
+    let final = await jobs.getJob("workspace", job.id);
+    for (let i = 0; i < 100 && ["queued", "processing"].includes(final!.status); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      final = await jobs.getJob("workspace", job.id);
+    }
+    assert.equal(final?.status, "completed");
+    const inventory = calls.find(call => call.path.includes("inventory_item"))!;
+    assert.equal(inventory.body.product.title, product.title);
+    assert.deepEqual(inventory.body.product.aspects.Size, ["M"]);
+  });
+});
+
 test("shirt publishes only after metadata validation, with photos and string-array aspects inside product", async () => {
   await withEbay({}, async calls => {
     const result = await createEbayPublishAdapter(env).publish(product, record);
@@ -99,6 +158,38 @@ test("shirt publishes only after metadata validation, with photos and string-arr
     assert.equal(inventory.headers.get("accept-language"), "en-US");
     assert.equal(inventory.headers.get("content-language"), "en-US");
     assert(calls.findIndex(call => call.path.includes("get_item_condition_policies")) < calls.indexOf(inventory));
+  });
+});
+
+test("publish checkpoints persist the offer before the publish request", async () => {
+  await withEbay({}, async calls => {
+    const stages: string[] = [];
+    const result = await createEbayPublishAdapter(env).publish(product, record, undefined, {
+      checkpoint: async checkpoint => {
+        stages.push(checkpoint.stage);
+        assert(!calls.some(call => call.path.endsWith("/publish")));
+        if (checkpoint.stage === "offer_saved" || checkpoint.stage === "publish_requested") {
+          assert.equal(checkpoint.remoteListing?.channelId, "ebay");
+          assert.equal(checkpoint.remoteListing?.channelId === "ebay" && checkpoint.remoteListing.offerId, "offer");
+          assert(calls.some(call => call.method === "POST" && call.path === "/sell/inventory/v1/offer"));
+        }
+      }
+    });
+    assert.equal(result.status, "published");
+    assert.deepEqual(stages, ["inventory_written", "offer_saved", "publish_requested"]);
+    assert.equal(calls.filter(call => call.path.endsWith("/publish")).length, 1);
+  });
+});
+
+test("failed offer checkpoint prevents publishing an unpersisted offer", async () => {
+  await withEbay({}, async calls => {
+    await assert.rejects(createEbayPublishAdapter(env).publish(product, record, undefined, {
+      checkpoint: async checkpoint => {
+        if (checkpoint.stage === "offer_saved") throw new Error("checkpoint storage unavailable");
+      }
+    }), /checkpoint storage unavailable/);
+    assert.equal(calls.filter(call => call.method === "POST" && call.path === "/sell/inventory/v1/offer").length, 1);
+    assert(!calls.some(call => call.path.endsWith("/publish")));
   });
 });
 
@@ -200,6 +291,32 @@ test("credential persistence failure does not discard a known remote listing", a
     assert.equal(final?.status, "failed");
     const remote = final?.targets[0].remoteListing;
     assert.equal(remote?.channelId === "ebay" && remote.listingId, "123");
+  });
+});
+
+test("service retains a known offer when its checkpoint fails but result storage recovers", async () => {
+  await withEbay({}, async calls => {
+    const jobs = createPublishJobRepository();
+    const listings = createChannelListingRepository();
+    const checkpoint = listings.recordCheckpoint.bind(listings);
+    listings.recordCheckpoint = async (identity, revision, state) => {
+      if (state.stage === "offer_saved") throw new Error("temporary storage failure");
+      await checkpoint(identity, revision, state);
+    };
+    const service = createPublishingService(jobs, connectedRepository(), env, listings);
+    const job = await service.enqueuePublishJob({ workspaceId: "workspace", product, channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] });
+    let final = await jobs.getJob("workspace", job.id);
+    for (let i = 0; i < 100 && ["queued", "processing"].includes(final!.status); i++) {
+      await new Promise(resolve => setTimeout(resolve, 5));
+      final = await jobs.getJob("workspace", job.id);
+    }
+    assert.equal(final?.status, "failed");
+    const listing = await listings.get({ workspaceId: "workspace", productId: product.id,
+      connectionId: record.connection.id, channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US",
+      sku: product.sku, externalAccountId: "" });
+    assert.equal(listing?.status, "needs_review");
+    assert.equal(listing?.remoteListing?.channelId === "ebay" && listing.remoteListing.offerId, "offer");
+    assert(!calls.some(call => call.path.endsWith("/publish")));
   });
 });
 

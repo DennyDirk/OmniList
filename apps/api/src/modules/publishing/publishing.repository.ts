@@ -1,5 +1,6 @@
-import { and, desc, eq, inArray } from "drizzle-orm";
-import type { PublishJob, PublishJobStatus, PublishJobTarget } from "@omnilist/shared";
+import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { productSchema, type Product, type PublishJob, type PublishJobStatus, type PublishJobTarget } from "@omnilist/shared";
+import { withProductRevision } from "../catalog/product-revision";
 
 import type { DbClient } from "../../db/client";
 import { publishJobsTable, publishJobTargetsTable } from "../../db/schema";
@@ -8,6 +9,7 @@ interface CreatePublishJobInput {
   workspaceId: string;
   productId: string;
   productTitle: string;
+  productSnapshot: Product;
   status: PublishJobStatus;
   targets: PublishJobTarget[];
 }
@@ -17,11 +19,26 @@ export interface PublishJobRepository {
   listJobs(workspaceId: string, productId?: string): Promise<PublishJob[]>;
   listUnfinishedJobs(): Promise<PublishJob[]>;
   getJob(workspaceId: string, jobId: string): Promise<PublishJob | undefined>;
-  updateJob(workspaceId: string, jobId: string, status: PublishJobStatus, targets: PublishJobTarget[]): Promise<PublishJob | undefined>;
+  getJobProduct(workspaceId: string, jobId: string): Promise<Product | undefined>;
+  claimJob(workspaceId: string, jobId: string): Promise<PublishJob | undefined>;
+  updateJob(workspaceId: string, jobId: string, status: PublishJobStatus, targets: PublishJobTarget[], executionId?: string): Promise<PublishJob | undefined>;
+}
+
+export class PublishExecutionChangedError extends Error {
+  constructor() { super("The publish execution changed. Its result was not overwritten."); }
 }
 
 function toIsoString(date: Date | string) {
   return typeof date === "string" ? new Date(date).toISOString() : date.toISOString();
+}
+
+function prepareSnapshot(value: unknown, productId: string, title: string): Product {
+  const parsed = productSchema.parse(value);
+  const snapshot = withProductRevision(parsed);
+  if (parsed.id !== productId || parsed.title !== title || (parsed.revision && parsed.revision !== snapshot.revision)) {
+    throw new Error("The publish snapshot does not match the confirmed product.");
+  }
+  return snapshot;
 }
 
 function buildJob(
@@ -30,6 +47,7 @@ function buildJob(
 ): PublishJob {
   return {
     id: job.id,
+    executionId: job.executionId ?? undefined,
     workspaceId: job.workspaceId,
     productId: job.productId,
     productTitle: job.productTitle,
@@ -52,6 +70,7 @@ function buildJob(
 
 function createMemoryPublishJobRepository(): PublishJobRepository {
   const jobsByWorkspace = new Map<string, Map<string, PublishJob>>();
+  const snapshots = new Map<string, Product>();
 
   function getWorkspaceJobs(workspaceId: string) {
     const existing = jobsByWorkspace.get(workspaceId);
@@ -66,6 +85,7 @@ function createMemoryPublishJobRepository(): PublishJobRepository {
 
   return {
     async createJob(input) {
+      const snapshot = prepareSnapshot(input.productSnapshot, input.productId, input.productTitle);
       const now = new Date().toISOString();
       const job: PublishJob = {
         id: crypto.randomUUID(),
@@ -75,25 +95,39 @@ function createMemoryPublishJobRepository(): PublishJobRepository {
         status: input.status,
         createdAt: now,
         updatedAt: now,
-        targets: input.targets
+        targets: structuredClone(input.targets)
       };
 
       getWorkspaceJobs(input.workspaceId).set(job.id, job);
-      return job;
+      snapshots.set(job.id, snapshot);
+      return structuredClone(job);
     },
     async listJobs(workspaceId, productId) {
       const items = [...getWorkspaceJobs(workspaceId).values()];
       const filtered = productId ? items.filter((item) => item.productId === productId) : items;
-      return filtered.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+      return structuredClone(filtered.sort((left, right) => right.createdAt.localeCompare(left.createdAt)));
     },
     async listUnfinishedJobs() {
-      return [...jobsByWorkspace.values()].flatMap(jobs => [...jobs.values()])
-        .filter(job => job.status === "queued" || job.status === "processing");
+      return structuredClone([...jobsByWorkspace.values()].flatMap(jobs => [...jobs.values()])
+        .filter(job => job.status === "queued" || job.status === "processing"));
     },
     async getJob(workspaceId, jobId) {
-      return getWorkspaceJobs(workspaceId).get(jobId);
+      return structuredClone(getWorkspaceJobs(workspaceId).get(jobId));
     },
-    async updateJob(workspaceId, jobId, status, targets) {
+    async getJobProduct(workspaceId, jobId) {
+      if (!getWorkspaceJobs(workspaceId).has(jobId)) return undefined;
+      return structuredClone(snapshots.get(jobId));
+    },
+    async claimJob(workspaceId, jobId) {
+      const jobs = getWorkspaceJobs(workspaceId);
+      const job = jobs.get(jobId);
+      if (!job || job.status !== "queued") return undefined;
+      const claimed: PublishJob = { ...job, executionId: crypto.randomUUID(), status: "processing", updatedAt: new Date().toISOString(),
+        targets: job.targets.map(target => ({ ...target, status: "processing" })) };
+      jobs.set(jobId, claimed);
+      return structuredClone(claimed);
+    },
+    async updateJob(workspaceId, jobId, status, targets, executionId) {
       const jobs = getWorkspaceJobs(workspaceId);
       const existing = jobs.get(jobId);
 
@@ -101,15 +135,18 @@ function createMemoryPublishJobRepository(): PublishJobRepository {
         return undefined;
       }
 
+      if (existing.executionId !== executionId || (existing.executionId && existing.status !== "processing")) {
+        throw new PublishExecutionChangedError();
+      }
       const nextJob: PublishJob = {
         ...existing,
         status,
         updatedAt: new Date().toISOString(),
-        targets
+        targets: structuredClone(targets)
       };
 
       jobs.set(jobId, nextJob);
-      return nextJob;
+      return structuredClone(nextJob);
     }
   };
 }
@@ -138,6 +175,7 @@ async function fetchTargetsByJobIds(db: DbClient, jobIds: string[]) {
 function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
   return {
     async createJob(input) {
+      const snapshot = prepareSnapshot(input.productSnapshot, input.productId, input.productTitle);
       const jobId = crypto.randomUUID();
       const now = new Date();
 
@@ -147,6 +185,7 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
           workspaceId: input.workspaceId,
           productId: input.productId,
           productTitle: input.productTitle,
+          productSnapshot: snapshot,
           status: input.status,
           createdAt: now,
           updatedAt: now
@@ -220,7 +259,27 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
       const targetsByJobId = await fetchTargetsByJobIds(db, [jobId]);
       return buildJob(rows[0], targetsByJobId.get(jobId) ?? []);
     },
-    async updateJob(workspaceId, jobId, status, targets) {
+    async getJobProduct(workspaceId, jobId) {
+      const [row] = await db.select({ productId: publishJobsTable.productId, title: publishJobsTable.productTitle,
+        snapshot: publishJobsTable.productSnapshot }).from(publishJobsTable)
+        .where(and(eq(publishJobsTable.workspaceId, workspaceId), eq(publishJobsTable.id, jobId))).limit(1);
+      if (!row?.snapshot) return undefined;
+      if (!row.snapshot.revision) throw new Error("The stored publish snapshot has no verified revision.");
+      return prepareSnapshot(row.snapshot, row.productId, row.title);
+    },
+    async claimJob(workspaceId, jobId) {
+      return db.transaction(async tx => {
+        const now = new Date();
+        const [job] = await tx.update(publishJobsTable).set({ status: "processing", executionId: crypto.randomUUID(), updatedAt: now })
+          .where(and(eq(publishJobsTable.workspaceId, workspaceId), eq(publishJobsTable.id, jobId),
+            eq(publishJobsTable.status, "queued"))).returning();
+        if (!job) return undefined;
+        const targets = await tx.update(publishJobTargetsTable).set({ status: "processing", updatedAt: now })
+          .where(eq(publishJobTargetsTable.publishJobId, jobId)).returning();
+        return buildJob(job, targets);
+      });
+    },
+    async updateJob(workspaceId, jobId, status, targets, executionId) {
       const existing = await this.getJob(workspaceId, jobId);
 
       if (!existing) {
@@ -230,13 +289,16 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
       const now = new Date();
 
       await db.transaction(async (tx) => {
-        await tx
+        const updated = await tx
           .update(publishJobsTable)
           .set({
             status,
             updatedAt: now
           })
-          .where(and(eq(publishJobsTable.workspaceId, workspaceId), eq(publishJobsTable.id, jobId)));
+          .where(and(eq(publishJobsTable.workspaceId, workspaceId), eq(publishJobsTable.id, jobId),
+            executionId ? and(eq(publishJobsTable.executionId, executionId), eq(publishJobsTable.status, "processing"))
+              : isNull(publishJobsTable.executionId))).returning({ id: publishJobsTable.id });
+        if (!updated.length) throw new PublishExecutionChangedError();
 
         for (const target of targets) {
           await tx
