@@ -113,6 +113,9 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
     });
     await t.test("0009 adds durable checkpoints; SQL rejects stale results and executing recovery", async () => {
       await coordinator.query(await migration("0009_publish_recovery"));
+      await coordinator.query(await migration("0010_publish_job_snapshot"));
+      await coordinator.query(await migration("0011_publish_execution_id"));
+      await coordinator.query(await migration("0012_publish_worker"));
       await reset();
       const item = await native.createProduct("workspace", product);
       const identity: ListingIdentity = { workspaceId: "workspace", productId: item.id,
@@ -138,7 +141,6 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
       const item = await native.createProduct("workspace", product);
       await a.query(`INSERT INTO publish_jobs (id, workspace_id, product_id, product_title, status)
         VALUES ('legacy-job', 'workspace', $1, $2, 'processing')`, [item.id, item.title]);
-      await coordinator.query(await migration("0010_publish_job_snapshot"));
       const writer = createPublishJobRepository(dbA);
       const reader = createPublishJobRepository(dbB);
       assert.equal(await reader.getJobProduct("workspace", "legacy-job"), undefined);
@@ -147,16 +149,77 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
         productSnapshot: original, status: "queued", targets: [{ id: "snapshot-target", channelId: "ebay",
           channelName: "eBay", connectionId: "connection", status: "queued", readinessScore: 100, issueCount: 0 }] });
       await native.updateProduct("workspace", item.id, { ...product, title: "Changed later" }, original.revision);
-      assert.deepEqual(await reader.getJobProduct("workspace", job.id), original);
+      assert.deepEqual(await reader.getJobProduct("workspace", job.id), JSON.parse(JSON.stringify(original)));
       assert.equal(await reader.getJobProduct("other-workspace", job.id), undefined);
       assert.equal(await reader.claimJob("other-workspace", job.id), undefined);
       const claims = await Promise.all([writer.claimJob("workspace", job.id), reader.claimJob("workspace", job.id)]);
       assert.equal(claims.filter(Boolean).length, 1);
       assert.equal((await reader.getJob("workspace", job.id))?.targets[0].status, "processing");
       assert.equal(await writer.claimJob("workspace", job.id), undefined);
-      await reader.updateJob("workspace", job.id, "failed", job.targets.map(target => ({ ...target, status: "failed" })));
-      assert.deepEqual(await writer.getJobProduct("workspace", job.id), original);
+      const owner = claims.find(Boolean)!.executionId;
+      assert.ok(owner);
+      const before = await reader.getJob("workspace", job.id);
+      for (const token of [undefined, "", "stale-executor"]) {
+        await assert.rejects(reader.updateJob("workspace", job.id, "failed", [], token), /execution changed/);
+        assert.deepEqual(await reader.getJob("workspace", job.id), before);
+      }
+      await reader.updateJob("workspace", job.id, "failed", job.targets.map(target => ({ ...target, status: "failed" })), owner);
+      await assert.rejects(writer.updateJob("workspace", job.id, "completed", [], owner), /execution changed/);
+      assert.deepEqual(await writer.getJobProduct("workspace", job.id), JSON.parse(JSON.stringify(original)));
       assert.equal("productSnapshot" in (await reader.getJob("workspace", job.id))!, false);
+    });
+    await t.test("expired worker ownership is fenced across PostgreSQL sessions, including same-payload retries", async () => {
+      await reset();
+      const item = await native.createProduct("workspace", product);
+      const writer = createPublishJobRepository(dbA), reader = createPublishJobRepository(dbB);
+      const job = await writer.createJob({ workspaceId: "workspace", productId: item.id, productTitle: item.title,
+        productSnapshot: item, connectionRevisions: { target: "hash" }, status: "queued", targets: [{ id: "lease-target", channelId: "ebay",
+          channelName: "eBay", connectionId: "connection", status: "queued", readinessScore: 100, issueCount: 0 }] });
+      const owner = (await writer.claimJob("workspace", job.id))!;
+      const identity: ListingIdentity = { workspaceId: "workspace", productId: item.id,
+        connectionId: "connection", channelId: "ebay", environment: "sandbox", marketplaceId: "EBAY_US",
+        sku: product.sku, externalAccountId: "seller" };
+      await listingsA.claim(identity, "same-payload", owner.executionId);
+      assert.equal(await reader.claimRecovery("workspace", job.id), undefined);
+      await listingsB.interruptExecution("workspace", owner.executionId!);
+      assert.equal((await listingsA.get(identity))?.status, "publishing", "A live lease cannot be interrupted");
+      assert.equal(await reader.renewExecution("workspace", job.id, owner.executionId!), true);
+      await coordinator.query("UPDATE publish_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [job.id]);
+      assert.equal(await writer.renewExecution("workspace", job.id, owner.executionId!), false);
+      const recoveries = await Promise.all([writer.claimRecovery("workspace", job.id), reader.claimRecovery("workspace", job.id)]);
+      assert.equal(recoveries.filter(Boolean).length, 1);
+      const recovery = recoveries.find(Boolean)!;
+      assert.equal(recovery.recoveryOf, owner.executionId);
+      await assert.rejects(writer.updateJob("workspace", job.id, "completed", [], owner.executionId), /execution changed/);
+      const stopped = await listingsB.interruptExecution("workspace", owner.executionId!);
+      assert.equal(stopped[0].status, "needs_review");
+      await assert.rejects(listingsA.recordCheckpoint(identity, "same-payload", { stage: "offer_saved" }, owner.executionId), /attempt changed/);
+      await listingsB.markRetryable(identity);
+      await assert.rejects(listingsA.claim(identity, "same-payload", owner.executionId), /no longer active/);
+      await assert.rejects(listingsB.claim(identity, "same-payload", recovery.executionId), /no longer active/);
+      const next = await writer.createJob({ workspaceId: "workspace", productId: item.id, productTitle: item.title,
+        productSnapshot: item, connectionRevisions: {}, status: "queued", targets: [{ ...job.targets[0], id: "retry-target" }] });
+      const nextOwner = (await reader.claimJob("workspace", next.id))!;
+      await listingsB.claim(identity, "same-payload", nextOwner.executionId);
+      await assert.rejects(listingsA.recordResult(identity, { status: "failed", revision: "same-payload", executionId: owner.executionId }), /attempt changed/);
+      await coordinator.query("UPDATE publish_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [job.id]);
+      assert.equal((await writer.claimRecovery("workspace", job.id))?.recoveryOf, owner.executionId);
+    });
+    await t.test("job and targets roll back together when outcome persistence fails", async () => {
+      await reset();
+      const item = await native.createProduct("workspace", product);
+      const jobs = createPublishJobRepository(dbA);
+      const job = await jobs.createJob({ workspaceId: "workspace", productId: item.id, productTitle: item.title,
+        productSnapshot: item, connectionRevisions: {}, status: "queued", targets: [{ id: "rollback-target", channelId: "ebay",
+          channelName: "eBay", status: "queued", readinessScore: 100, issueCount: 0 }] });
+      const owner = (await jobs.claimJob("workspace", job.id))!;
+      await coordinator.query(`CREATE FUNCTION fail_outcome() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'injected target failure'; END $$`);
+      await coordinator.query("CREATE TRIGGER fail_outcome BEFORE UPDATE ON publish_job_targets FOR EACH ROW EXECUTE FUNCTION fail_outcome()");
+      try {
+        await assert.rejects(jobs.updateJob("workspace", job.id, "completed", owner.targets.map(t => ({ ...t, status: "published" })), owner.executionId));
+        assert.deepEqual(await jobs.getJob("workspace", job.id), owner);
+      } finally { await coordinator.query("DROP TRIGGER fail_outcome ON publish_job_targets"); }
     });
     await t.test("two PostgreSQL editors cannot overwrite the same product revision", async () => {
       await reset();

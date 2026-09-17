@@ -46,6 +46,24 @@ test("only one executor can claim a queued job; foreign or completed jobs cannot
   assert.equal(claims.filter(Boolean).length, 1);
   assert.equal(claims.find(Boolean)?.targets[0].status, "processing");
   assert.equal(await repo.claimJob("workspace", job.id), undefined);
-  await repo.updateJob("workspace", job.id, "completed", []);
+  await repo.updateJob("workspace", job.id, "completed", [], claims.find(Boolean)!.executionId);
   assert.equal(await repo.claimJob("workspace", job.id), undefined);
+});
+
+test("only the claiming executor can finish a job and terminal outcomes cannot be overwritten", async () => {
+  const repo = createPublishJobRepository();
+  const job = await repo.createJob({ workspaceId: "workspace", productId: product.id, productTitle: product.title,
+    productSnapshot: product, status: "queued", targets: [{ id: "target", channelId: "ebay", channelName: "eBay",
+      status: "queued", readinessScore: 100, issueCount: 0 }] });
+  const claimed = (await repo.claimJob("workspace", job.id))!;
+  assert.ok(claimed.executionId);
+  for (const token of [undefined, "", "stale-executor"]) {
+    await assert.rejects(repo.updateJob("workspace", job.id, "failed", [], token), /execution changed/);
+    assert.deepEqual(await repo.getJob("workspace", job.id), claimed);
+  }
+  assert.equal(await repo.updateJob("foreign", job.id, "failed", [], claimed.executionId), undefined);
+  const targets = claimed.targets.map(target => ({ ...target, status: "published" as const }));
+  const completed = await repo.updateJob("workspace", job.id, "completed", targets, claimed.executionId);
+  await assert.rejects(repo.updateJob("workspace", job.id, "failed", [], claimed.executionId), /execution changed/);
+  assert.deepEqual(await repo.getJob("workspace", job.id), completed);
 });

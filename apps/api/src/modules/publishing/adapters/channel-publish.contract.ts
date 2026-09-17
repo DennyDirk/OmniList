@@ -10,7 +10,7 @@ export interface ChannelPublishExecutionResult {
 }
 
 export interface ChannelPublishCheckpoint {
-  stage: "inventory_written" | "offer_saved" | "publish_requested";
+  stage: "inventory_write_requested" | "inventory_written" | "offer_write_requested" | "offer_saved" | "publish_requested";
   remoteListing?: RemoteListingReference;
 }
 

@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, isNull } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, isNotNull, or, sql } from "drizzle-orm";
 import { productSchema, type Product, type PublishJob, type PublishJobStatus, type PublishJobTarget } from "@omnilist/shared";
 import { withProductRevision } from "../catalog/product-revision";
 
@@ -10,9 +10,16 @@ interface CreatePublishJobInput {
   productId: string;
   productTitle: string;
   productSnapshot: Product;
+  connectionRevisions?: Record<string, string>;
   status: PublishJobStatus;
   targets: PublishJobTarget[];
 }
+
+export interface ExecutionJob extends PublishJob { recoveryOf?: string }
+export const PUBLISH_LEASE_MS = 120_000;
+const leaseDeadline = sql`clock_timestamp() + interval '120 seconds'`;
+const liveLease = sql`${publishJobsTable.leaseExpiresAt} > clock_timestamp()`;
+const expiredLease = sql`${publishJobsTable.leaseExpiresAt} <= clock_timestamp()`;
 
 export interface PublishJobRepository {
   createJob(input: CreatePublishJobInput): Promise<PublishJob>;
@@ -20,6 +27,10 @@ export interface PublishJobRepository {
   listUnfinishedJobs(): Promise<PublishJob[]>;
   getJob(workspaceId: string, jobId: string): Promise<PublishJob | undefined>;
   getJobProduct(workspaceId: string, jobId: string): Promise<Product | undefined>;
+  getConnectionRevisions(workspaceId: string, jobId: string): Promise<Record<string, string> | undefined>;
+  listRunnableJobs(): Promise<PublishJob[]>;
+  renewExecution(workspaceId: string, jobId: string, executionId: string): Promise<boolean>;
+  claimRecovery(workspaceId: string, jobId: string): Promise<ExecutionJob | undefined>;
   claimJob(workspaceId: string, jobId: string): Promise<PublishJob | undefined>;
   updateJob(workspaceId: string, jobId: string, status: PublishJobStatus, targets: PublishJobTarget[], executionId?: string): Promise<PublishJob | undefined>;
 }
@@ -44,10 +55,11 @@ function prepareSnapshot(value: unknown, productId: string, title: string): Prod
 function buildJob(
   job: typeof publishJobsTable.$inferSelect,
   targets: typeof publishJobTargetsTable.$inferSelect[]
-): PublishJob {
+): ExecutionJob {
   return {
     id: job.id,
     executionId: job.executionId ?? undefined,
+    recoveryOf: job.recoveryOf ?? undefined,
     workspaceId: job.workspaceId,
     productId: job.productId,
     productTitle: job.productTitle,
@@ -68,9 +80,11 @@ function buildJob(
   };
 }
 
-function createMemoryPublishJobRepository(): PublishJobRepository {
-  const jobsByWorkspace = new Map<string, Map<string, PublishJob>>();
+function createMemoryPublishJobRepository(now: () => number): PublishJobRepository {
+  const jobsByWorkspace = new Map<string, Map<string, ExecutionJob>>();
   const snapshots = new Map<string, Product>();
+  const revisions = new Map<string, Record<string, string>>();
+  const leases = new Map<string, number>();
 
   function getWorkspaceJobs(workspaceId: string) {
     const existing = jobsByWorkspace.get(workspaceId);
@@ -78,7 +92,7 @@ function createMemoryPublishJobRepository(): PublishJobRepository {
       return existing;
     }
 
-    const created = new Map<string, PublishJob>();
+    const created = new Map<string, ExecutionJob>();
     jobsByWorkspace.set(workspaceId, created);
     return created;
   }
@@ -100,6 +114,7 @@ function createMemoryPublishJobRepository(): PublishJobRepository {
 
       getWorkspaceJobs(input.workspaceId).set(job.id, job);
       snapshots.set(job.id, snapshot);
+      if (input.connectionRevisions) revisions.set(job.id, structuredClone(input.connectionRevisions));
       return structuredClone(job);
     },
     async listJobs(workspaceId, productId) {
@@ -118,6 +133,31 @@ function createMemoryPublishJobRepository(): PublishJobRepository {
       if (!getWorkspaceJobs(workspaceId).has(jobId)) return undefined;
       return structuredClone(snapshots.get(jobId));
     },
+    async getConnectionRevisions(workspaceId, jobId) {
+      if (!getWorkspaceJobs(workspaceId).has(jobId)) return undefined;
+      return structuredClone(revisions.get(jobId));
+    },
+    async listRunnableJobs() {
+      return structuredClone([...jobsByWorkspace.values()].flatMap(jobs => [...jobs.values()])
+        .filter(job => (job.status === "queued" && revisions.has(job.id)) ||
+          (job.status === "processing" && (leases.get(job.id) ?? Infinity) <= now()))
+        .sort((a, b) => a.createdAt.localeCompare(b.createdAt)).slice(0, 20));
+    },
+    async renewExecution(workspaceId, jobId, executionId) {
+      const job = getWorkspaceJobs(workspaceId).get(jobId);
+      if (!job || job.status !== "processing" || job.executionId !== executionId || (leases.get(jobId) ?? 0) <= now()) return false;
+      leases.set(jobId, now() + PUBLISH_LEASE_MS);
+      return true;
+    },
+    async claimRecovery(workspaceId, jobId) {
+      const jobs = getWorkspaceJobs(workspaceId);
+      const job = jobs.get(jobId);
+      if (!job?.executionId || job.status !== "processing" || (leases.get(jobId) ?? Infinity) > now()) return undefined;
+      const recovered = { ...job, recoveryOf: job.recoveryOf ?? job.executionId, executionId: crypto.randomUUID() };
+      jobs.set(jobId, recovered);
+      leases.set(jobId, now() + PUBLISH_LEASE_MS);
+      return structuredClone(recovered);
+    },
     async claimJob(workspaceId, jobId) {
       const jobs = getWorkspaceJobs(workspaceId);
       const job = jobs.get(jobId);
@@ -125,6 +165,7 @@ function createMemoryPublishJobRepository(): PublishJobRepository {
       const claimed: PublishJob = { ...job, executionId: crypto.randomUUID(), status: "processing", updatedAt: new Date().toISOString(),
         targets: job.targets.map(target => ({ ...target, status: "processing" })) };
       jobs.set(jobId, claimed);
+      leases.set(jobId, now() + PUBLISH_LEASE_MS);
       return structuredClone(claimed);
     },
     async updateJob(workspaceId, jobId, status, targets, executionId) {
@@ -135,7 +176,8 @@ function createMemoryPublishJobRepository(): PublishJobRepository {
         return undefined;
       }
 
-      if (existing.executionId !== executionId || (existing.executionId && existing.status !== "processing")) {
+      if (existing.executionId !== executionId || (existing.executionId &&
+        (existing.status !== "processing" || (leases.get(jobId) ?? 0) <= now()))) {
         throw new PublishExecutionChangedError();
       }
       const nextJob: PublishJob = {
@@ -186,6 +228,7 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
           productId: input.productId,
           productTitle: input.productTitle,
           productSnapshot: snapshot,
+          connectionRevisions: input.connectionRevisions,
           status: input.status,
           createdAt: now,
           updatedAt: now
@@ -270,12 +313,45 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
     async claimJob(workspaceId, jobId) {
       return db.transaction(async tx => {
         const now = new Date();
-        const [job] = await tx.update(publishJobsTable).set({ status: "processing", executionId: crypto.randomUUID(), updatedAt: now })
+        const [job] = await tx.update(publishJobsTable).set({ status: "processing", executionId: crypto.randomUUID(),
+          leaseExpiresAt: leaseDeadline, updatedAt: now })
           .where(and(eq(publishJobsTable.workspaceId, workspaceId), eq(publishJobsTable.id, jobId),
             eq(publishJobsTable.status, "queued"))).returning();
         if (!job) return undefined;
         const targets = await tx.update(publishJobTargetsTable).set({ status: "processing", updatedAt: now })
           .where(eq(publishJobTargetsTable.publishJobId, jobId)).returning();
+        return buildJob(job, targets);
+      });
+    },
+    async getConnectionRevisions(workspaceId, jobId) {
+      const [row] = await db.select({ revisions: publishJobsTable.connectionRevisions }).from(publishJobsTable)
+        .where(and(eq(publishJobsTable.workspaceId, workspaceId), eq(publishJobsTable.id, jobId))).limit(1);
+      return row?.revisions ?? undefined;
+    },
+    async listRunnableJobs() {
+      const rows = await db.select().from(publishJobsTable).where(or(
+        and(eq(publishJobsTable.status, "queued"), isNotNull(publishJobsTable.productSnapshot), isNotNull(publishJobsTable.connectionRevisions)),
+        and(eq(publishJobsTable.status, "processing"), isNotNull(publishJobsTable.executionId), expiredLease)
+      )).orderBy(asc(publishJobsTable.createdAt)).limit(20);
+      const targets = await fetchTargetsByJobIds(db, rows.map(row => row.id));
+      return rows.map(row => buildJob(row, targets.get(row.id) ?? []));
+    },
+    async renewExecution(workspaceId, jobId, executionId) {
+      const rows = await db.update(publishJobsTable).set({ leaseExpiresAt: leaseDeadline })
+        .where(and(eq(publishJobsTable.workspaceId, workspaceId), eq(publishJobsTable.id, jobId),
+          eq(publishJobsTable.executionId, executionId), eq(publishJobsTable.status, "processing"), liveLease))
+        .returning({ id: publishJobsTable.id });
+      return rows.length === 1;
+    },
+    async claimRecovery(workspaceId, jobId) {
+      return db.transaction(async tx => {
+        const [job] = await tx.update(publishJobsTable).set({ executionId: crypto.randomUUID(),
+          recoveryOf: sql`coalesce(${publishJobsTable.recoveryOf}, ${publishJobsTable.executionId})`,
+          leaseExpiresAt: leaseDeadline, updatedAt: new Date() })
+          .where(and(eq(publishJobsTable.workspaceId, workspaceId), eq(publishJobsTable.id, jobId),
+            eq(publishJobsTable.status, "processing"), isNotNull(publishJobsTable.executionId), expiredLease)).returning();
+        if (!job) return undefined;
+        const targets = await tx.select().from(publishJobTargetsTable).where(eq(publishJobTargetsTable.publishJobId, jobId));
         return buildJob(job, targets);
       });
     },
@@ -296,7 +372,7 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
             updatedAt: now
           })
           .where(and(eq(publishJobsTable.workspaceId, workspaceId), eq(publishJobsTable.id, jobId),
-            executionId ? and(eq(publishJobsTable.executionId, executionId), eq(publishJobsTable.status, "processing"))
+            executionId !== undefined ? and(eq(publishJobsTable.executionId, executionId), eq(publishJobsTable.status, "processing"), liveLease)
               : isNull(publishJobsTable.executionId))).returning({ id: publishJobsTable.id });
         if (!updated.length) throw new PublishExecutionChangedError();
 
@@ -326,9 +402,9 @@ function createDbPublishJobRepository(db: DbClient): PublishJobRepository {
   };
 }
 
-export function createPublishJobRepository(db?: DbClient): PublishJobRepository {
+export function createPublishJobRepository(db?: DbClient, now = Date.now): PublishJobRepository {
   if (!db) {
-    return createMemoryPublishJobRepository();
+    return createMemoryPublishJobRepository(now);
   }
 
   return createDbPublishJobRepository(db);
