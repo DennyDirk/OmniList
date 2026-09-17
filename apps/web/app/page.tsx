@@ -35,7 +35,7 @@ export default async function DashboardPage() {
         </article>;
       })}
     </section>
-    {products.length > 1 ? <details className="card listing-stock"><summary>{dictionary.dashboard.publishCenterTitle}</summary><p className="field-hint">{text.checkHint}</p><BulkPublishCard apiBaseUrl={getClientApiBaseUrl()} products={products} connections={connections.filter(item => item.channelId === "ebay")} locale={locale} /></details> : null}
+    {products.length > 1 ? <details className="card listing-stock"><summary>{dictionary.dashboard.publishCenterTitle}</summary><p className="field-hint">{text.checkHint}</p><BulkPublishCard key={JSON.stringify([products.map(product => [product.id, product.revision]), ebay])} apiBaseUrl={getClientApiBaseUrl()} products={products} connections={connections.filter(item => item.channelId === "ebay")} activeProductIds={jobs.filter(job => job.status === "queued" || job.status === "processing").map(job => job.productId)} locale={locale} /></details> : null}
     {jobs.length ? <details className="listing-stock"><summary>{text.history}</summary><PublishJobHistory jobs={jobs} locale={locale} /></details> : null}
     <footer className="listing-account"><span className="field-hint">{session.user.email}</span><Link className="text-link" href="/billing">{dictionary.common.managePlan}</Link><LogoutButton locale={locale} /></footer>
   </main>;

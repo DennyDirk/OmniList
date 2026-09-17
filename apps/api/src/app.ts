@@ -42,6 +42,7 @@ import { createPublishJobRepository } from "./modules/publishing/publishing.repo
 import { createChannelListingRepository } from "./modules/publishing/channel-listings.repository";
 import { buildPublishPreview } from "./modules/publishing/publishing.service";
 import { createPublishingService } from "./modules/publishing/publishing.service";
+import { assertConfirmedConnections, confirmBulkProducts } from "./modules/publishing/publish-confirmation";
 import { validateProductAcrossChannels } from "./modules/validation/validation.service";
 import { UnifiedAssessmentService } from "./modules/validation/assessment.service";
 import { createWorkspaceRepository } from "./modules/workspace/workspace.repository";
@@ -600,12 +601,15 @@ export async function buildApp() {
       });
     }
 
+    const selectedChannels = [...new Set(normalizeChannelIds(query.channels))];
+    const records = await Promise.all(selectedChannels.map(channelId =>
+      channelConnectionRepository.getConnectionRecord(session.workspace.id, channelId)));
     return {
       productId: product.id,
       productRevision: product.revision,
-      items: await Promise.all([...new Set(normalizeChannelIds(query.channels))].map(async channelId =>
-        assessmentService.assessProduct(product, channelId, channelId === "ebay"
-          ? await channelConnectionRepository.getConnectionRecord(session.workspace.id, channelId) : undefined)))
+      connections: records.flatMap(record => record ? [record.connection] : []),
+      items: await Promise.all(selectedChannels.map((channelId, index) =>
+        assessmentService.assessProduct(product, channelId, records[index])))
     };
   });
 
@@ -699,31 +703,27 @@ export async function buildApp() {
       }
 
       const body = bulkPublishJobRequestSchema.parse(request.body ?? {});
+      const products = await confirmBulkProducts(body.products,
+        productId => catalogService.getProductById(session.workspace.id, productId));
       const connections = await channelConnectionsService.listConnections(session.workspace.id);
       const connectionRecords = await Promise.all(
         body.channels.map((channelId) => channelConnectionRepository.getConnectionRecord(session.workspace.id, channelId))
       );
 
       const queuedJobs = [];
-      const skipped: Array<{ productId: string; reason: string }> = [];
+      const confirmedRecords = connectionRecords.filter((item): item is NonNullable<typeof item> => Boolean(item));
+      assertConfirmedConnections(session.workspace.id, body.channels, body.connectionRevisions, confirmedRecords, env.ebayEnvironment);
 
-      for (const productId of body.productIds) {
-        const product = await catalogService.getProductById(session.workspace.id, productId);
-
-        if (!product) {
-          skipped.push({
-            productId,
-            reason: "Product not found."
-          });
-          continue;
-        }
+      for (const product of products) {
 
         const job = await publishingService.enqueuePublishJob({
           workspaceId: session.workspace.id,
           product,
+          expectedRevision: product.revision,
+          expectedConnectionRevisions: body.connectionRevisions,
           channelIds: body.channels,
           connections,
-          connectionRecords: connectionRecords.filter((item): item is NonNullable<typeof item> => Boolean(item))
+          connectionRecords: confirmedRecords
         });
 
         queuedJobs.push(job);
@@ -731,8 +731,7 @@ export async function buildApp() {
 
       return reply.code(202).send({
         items: queuedJobs,
-        queuedCount: queuedJobs.length,
-        skipped
+        queuedCount: queuedJobs.length
       });
     } catch (error) {
       if (error instanceof ZodError) {
@@ -741,7 +740,7 @@ export async function buildApp() {
           issues: error.flatten()
         });
       }
-
+      if (error instanceof ProductWriteError) return reply.code(error.statusCode).send({ message: error.message });
       throw error;
     }
   });
@@ -837,6 +836,7 @@ export async function buildApp() {
         workspaceId: session.workspace.id,
         product,
         expectedRevision: body.productRevision,
+        expectedConnectionRevisions: body.connectionRevisions,
         channelIds,
         connections,
         connectionRecords: connectionRecords.filter((item): item is NonNullable<typeof item> => Boolean(item))
