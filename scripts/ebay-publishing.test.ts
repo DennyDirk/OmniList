@@ -7,7 +7,8 @@ import { getEbaySellerSetupOptions } from "../apps/api/src/modules/channels/adap
 import { createChannelAuthService } from "../apps/api/src/modules/channels/channel-auth.service";
 import { createChannelConnectionRepository, type ChannelConnectionRecord } from "../apps/api/src/modules/channels/channel-connections.repository";
 import { buildPublishPreview, createPublishingService } from "../apps/api/src/modules/publishing/publishing.service";
-import { createPublishJobRepository } from "../apps/api/src/modules/publishing/publishing.repository";
+import { createPublishJobRepository, PUBLISH_LEASE_MS } from "../apps/api/src/modules/publishing/publishing.repository";
+import { connectionRevision } from "../apps/api/src/modules/publishing/connection-revision";
 import { createChannelListingRepository } from "../apps/api/src/modules/publishing/channel-listings.repository";
 import type { ApiEnv } from "../apps/api/src/config/env";
 import { withProductRevision } from "../apps/api/src/modules/catalog/product-revision";
@@ -85,6 +86,68 @@ async function withEbay(options: Options, run: (calls: Call[]) => Promise<void>)
   };
   try { await run(calls); } finally { globalThis.fetch = original; }
 }
+
+test("a new process resumes queued snapshots once, never legacy contextless jobs", async () => {
+  await withEbay({}, async calls => {
+    const jobs = createPublishJobRepository();
+    const listings = createChannelListingRepository();
+    const targets = [{ id: "queued-target", channelId: "ebay" as const, channelName: "eBay", connectionId: record.connection.id,
+      status: "queued" as const, readinessScore: 100, issueCount: 0 }];
+    const input = { workspaceId: "workspace", productId: product.id, productTitle: product.title, productSnapshot: product,
+      status: "queued" as const, targets };
+    const legacy = await jobs.createJob(input);
+    const queued = await jobs.createJob({ ...input, connectionRevisions: { "queued-target": connectionRevision(record, "sandbox") } });
+    const first = createPublishingService(jobs, connectedRepository(), env, listings);
+    const second = createPublishingService(jobs, connectedRepository(), env, listings);
+    await Promise.all([first.resumePendingJobs(), second.resumePendingJobs()]);
+    assert.equal((await jobs.getJob("workspace", legacy.id))?.status, "queued");
+    assert.equal((await jobs.getJob("workspace", queued.id))?.status, "completed");
+    assert.equal(calls.filter(call => call.method === "POST" && call.path === "/sell/inventory/v1/offer").length, 1);
+  });
+});
+
+test("queued work never follows a replaced connection or changed seller setup", async () => {
+  await withEbay({}, async calls => {
+    const jobs = createPublishJobRepository();
+    const job = await jobs.createJob({ workspaceId: "workspace", productId: product.id, productTitle: product.title,
+      productSnapshot: product, status: "queued", connectionRevisions: { target: "previous-connection-revision" },
+      targets: [{ id: "target", channelId: "ebay", channelName: "eBay", connectionId: record.connection.id,
+        status: "queued", readinessScore: 100, issueCount: 0 }] });
+    await createPublishingService(jobs, connectedRepository(), env).resumePendingJobs();
+    assert.equal((await jobs.getJob("workspace", job.id))?.status, "failed");
+    assert.match((await jobs.getJob("workspace", job.id))!.targets[0].message!, /changed after confirmation/);
+    assert.equal(calls.length, 0);
+  });
+});
+
+test("an old worker returning after lease loss cannot create an offer or overwrite recovery", async () => {
+  await withEbay({}, async calls => {
+    let time = 1000;
+    const jobs = createPublishJobRepository(undefined, () => time);
+    const listings = createChannelListingRepository();
+    const service = createPublishingService(jobs, connectedRepository(), env, listings);
+    let release!: () => void, entered!: () => void;
+    const blocked = new Promise<void>(resolve => { release = resolve; });
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const fetch = globalThis.fetch;
+    globalThis.fetch = async (url, init) => {
+      if (String(url).includes("/inventory_item/") && init?.method === "PUT") { entered(); await blocked; }
+      return fetch(url, init);
+    };
+    try {
+      const job = await service.enqueuePublishJob({ workspaceId: "workspace", product, channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] });
+      await started;
+      time += PUBLISH_LEASE_MS + 1;
+      await createPublishingService(jobs, connectedRepository(), env, listings).resumePendingJobs();
+      const recovered = await jobs.getJob("workspace", job.id);
+      assert.equal(recovered?.status, "failed");
+      release();
+      await service.resumePendingJobs();
+      assert.deepEqual(await jobs.getJob("workspace", job.id), recovered);
+      assert(!calls.some(call => call.method === "POST" && call.path === "/sell/inventory/v1/offer"));
+    } finally { release(); globalThis.fetch = fetch; }
+  });
+});
 
 test("single publish requires a revision and rejects an outdated preview before queuing", async () => {
   assert.equal(publishJobRequestSchema.safeParse({ channels: ["ebay"] }).success, false);
@@ -176,7 +239,7 @@ test("publish checkpoints persist the offer before the publish request", async (
       }
     });
     assert.equal(result.status, "published");
-    assert.deepEqual(stages, ["inventory_written", "offer_saved", "publish_requested"]);
+    assert.deepEqual(stages, ["inventory_write_requested", "inventory_written", "offer_write_requested", "offer_saved", "publish_requested"]);
     assert.equal(calls.filter(call => call.path.endsWith("/publish")).length, 1);
   });
 });
@@ -274,7 +337,7 @@ test("a publish transport failure retains the known offer without inventing a li
   });
 });
 
-test("credential persistence failure does not discard a known remote listing", async () => {
+test("credential persistence failure does not turn a confirmed publication into a failed job", async () => {
   await withEbay({}, async calls => {
     const jobs = createPublishJobRepository();
     const connections = connectedRepository();
@@ -288,7 +351,8 @@ test("credential persistence failure does not discard a known remote listing", a
       await new Promise(resolve => setTimeout(resolve, 5));
       final = await jobs.getJob("workspace", job.id);
     }
-    assert.equal(final?.status, "failed");
+    assert.equal(final?.status, "completed");
+    assert.match(final!.targets[0].message!, /credentials could not be saved/);
     const remote = final?.targets[0].remoteListing;
     assert.equal(remote?.channelId === "ebay" && remote.listingId, "123");
   });
@@ -299,9 +363,9 @@ test("service retains a known offer when its checkpoint fails but result storage
     const jobs = createPublishJobRepository();
     const listings = createChannelListingRepository();
     const checkpoint = listings.recordCheckpoint.bind(listings);
-    listings.recordCheckpoint = async (identity, revision, state) => {
+    listings.recordCheckpoint = async (identity, revision, state, executionId) => {
       if (state.stage === "offer_saved") throw new Error("temporary storage failure");
-      await checkpoint(identity, revision, state);
+      await checkpoint(identity, revision, state, executionId);
     };
     const service = createPublishingService(jobs, connectedRepository(), env, listings);
     const job = await service.enqueuePublishJob({ workspaceId: "workspace", product, channelIds: ["ebay"], connections: [record.connection], connectionRecords: [record] });

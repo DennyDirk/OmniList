@@ -13,7 +13,9 @@ import {
   type PublishPreview
 } from "@omnilist/shared";
 
-import type { PublishJobRepository } from "./publishing.repository";
+import { PublishExecutionChangedError, type PublishJobRepository } from "./publishing.repository";
+import { connectionRevision } from "./connection-revision";
+import { createEbayRecoveryService } from "./ebay-recovery.service";
 import { validateProductAcrossChannels } from "../validation/validation.service";
 import { UnifiedAssessmentService } from "../validation/assessment.service";
 import type { ChannelConnectionRecord, ChannelConnectionRepository } from "../channels/channel-connections.repository";
@@ -90,7 +92,10 @@ async function processTargets(
   jobs: PublishJobRepository,
   channelConnectionRepository: ChannelConnectionRepository,
   product: Product,
-  targets: PublishJobTarget[]
+  targets: PublishJobTarget[],
+  connectionRevisions: Record<string, string>,
+  executionId: string,
+  assertExecution: () => Promise<void>
 ): Promise<PublishJobTarget[]> {
   const registry = createChannelPublishRegistry(env);
   const assessments = new UnifiedAssessmentService(env, channelConnectionRepository);
@@ -105,6 +110,9 @@ async function processTargets(
       const connection = record?.connection;
       if (!record || !connection || connection.workspaceId !== workspaceId || connection.channelId !== target.channelId || connection.status !== "connected") {
         return { ...target, status: "failed", message: "Channel is not connected or requires reauthorization." };
+      }
+      if (connectionRevisions[target.id] !== connectionRevision(record, env.ebayEnvironment)) {
+        return { ...target, status: "failed", message: "The connected account or its settings changed after confirmation. Check the product and publish again." };
       }
       const readiness = await assessments.assessProduct(product, target.channelId, record);
       if (!canPublishAssessment(readiness)) {
@@ -130,7 +138,8 @@ async function processTargets(
           environment: env.ebayEnvironment, marketplaceId: payload.offerPayload.marketplaceId,
           sku: payload.offerPayload.sku, externalAccountId: connection.externalAccountId ?? "" };
         revision = createHash("sha256").update(JSON.stringify(payload)).digest("hex");
-        const listing = await listings.claim(identity, revision);
+        await assertExecution();
+        const listing = await listings.claim(identity, revision, executionId);
         claimed = true;
         remoteListing = listing.remoteListing ?? undefined;
         if (!remoteListing) {
@@ -151,24 +160,35 @@ async function processTargets(
       const result = await registry.publish(product, target.channelId, record, remoteListing, identity ? {
         checkpoint: async checkpoint => {
           remoteListing = checkpoint.remoteListing ?? remoteListing;
-          await listings.recordCheckpoint(identity!, revision, checkpoint);
+          await assertExecution();
+          await listings.recordCheckpoint(identity!, revision, checkpoint, executionId);
         }
       } : undefined);
       if (!result) return { ...target, status: "failed", message: "Publishing to this channel is not implemented yet. No listing was created." };
       remoteListing = result.remoteListing ?? remoteListing;
       if (identity) {
-        await listings.recordResult(identity, { ...result, revision });
+        await assertExecution();
+        await listings.recordResult(identity, { ...result, revision, executionId });
         claimed = false;
       }
+      let credentialWarning = "";
       if (result.updatedCredentials) {
-        await channelConnectionRepository.setCredentialsForConnection(workspaceId, connection.id, record.credentials, result.updatedCredentials);
+        try { await channelConnectionRepository.setCredentialsForConnection(workspaceId, connection.id, record.credentials, result.updatedCredentials); }
+        catch {
+          // A token-storage error cannot undo a confirmed and persisted listing result.
+          credentialWarning = " Connection credentials could not be saved; reauthorization may be needed before the next publish.";
+          console.error("Could not persist refreshed channel credentials", { connectionId: connection.id });
+        }
       }
       return { ...target, status: result.status, readinessScore: readiness.score, issueCount: readiness.issues.length,
-        message: result.message, connectionId: connection.id, remoteListing };
+        message: result.message + credentialWarning, connectionId: connection.id, remoteListing };
     } catch (error) {
       if (claimed && identity) {
         // No timed unlock: a lost response may already have created an offer at the provider.
-        try { await listings.recordResult(identity, { status: "failed", remoteListing, revision, requiresReconciliation: true }); }
+        try {
+          await assertExecution();
+          await listings.recordResult(identity, { status: "failed", remoteListing, revision, executionId, requiresReconciliation: true });
+        }
         catch { /* A storage failure leaves the persisted claim locked for reconciliation. */ }
       }
       return { ...target, remoteListing, status: "failed", message: error instanceof ListingOwnershipError ? error.message
@@ -185,7 +205,104 @@ export function createPublishingService(
 ) {
   const registry = createChannelPublishRegistry(env);
 
+  async function recoverTargets(job: PublishJob, originalExecutionId: string): Promise<PublishJobTarget[]> {
+    const stopped = await listings.interruptExecution(job.workspaceId, originalExecutionId);
+    const recovery = createEbayRecoveryService(channelConnectionRepository, listings, env);
+    return Promise.all(job.targets.map(async target => {
+      const listing = stopped.find(item => item.productId === job.productId && item.connectionId === target.connectionId && item.channelId === target.channelId);
+      let result: PublishJobTarget = { ...target, status: "failed",
+        message: "This task stopped before sending a listing. Check the product and publish again." };
+      if (!listing) return result;
+      result = { ...result, remoteListing: listing.remoteListing ?? undefined,
+        message: "The interrupted publication needs verification. Use Check eBay result on the product before retrying." };
+      if (listing.status === "published" && listing.executionStage === "finished" && listing.remoteListing) {
+        return { ...result, status: "published", message: "Recovered the saved eBay publication result." };
+      }
+      if (listing.status !== "needs_review") return result;
+      if (listing.executionStage === "claimed") {
+        await listings.markRetryable(listing, listing.remoteListing ?? undefined, listing);
+        return { ...result, message: "The task stopped before any eBay write. Check the product and publish again." };
+      }
+      try {
+        const outcome = await recovery.recoverListing(listing);
+        return { ...result, status: outcome.status === "published" ? "published" : "failed",
+          remoteListing: outcome.remoteListing ?? result.remoteListing,
+          message: outcome.status === "published" ? `${outcome.message} Latest product changes are not confirmed; review the listing.` : outcome.message };
+      } catch { return result; }
+    }));
+  }
+
+  async function executeJob(workspaceId: string, jobId: string, recover = false) {
+    const job = recover ? await repository.claimRecovery(workspaceId, jobId) : await repository.claimJob(workspaceId, jobId);
+    if (!job?.executionId) return;
+    const executionId = job.executionId;
+    let lost = false;
+    const assertExecution = async () => {
+      if (lost || !await repository.renewExecution(workspaceId, jobId, executionId)) {
+        lost = true;
+        throw new PublishExecutionChangedError();
+      }
+    };
+    let heartbeatPending = false;
+    const heartbeat = setInterval(() => {
+      if (heartbeatPending || lost) return;
+      heartbeatPending = true;
+      void assertExecution().catch(() => { lost = true; }).finally(() => { heartbeatPending = false; });
+    }, 20_000);
+    heartbeat.unref();
+    try {
+      let finalTargets: PublishJobTarget[];
+      if ("recoveryOf" in job && typeof job.recoveryOf === "string") {
+        finalTargets = await recoverTargets(job, job.recoveryOf);
+      } else {
+        const product = await repository.getJobProduct(workspaceId, jobId);
+        const revisions = await repository.getConnectionRevisions(workspaceId, jobId);
+        finalTargets = !product || !revisions
+          ? job.targets.map(target => ({ ...target, status: "failed" as const,
+            message: "The confirmed publication snapshot is unavailable. No request was sent. Check the product and publish again." }))
+          : await processTargets(env, workspaceId, listings, repository, channelConnectionRepository,
+            product, job.targets, revisions, executionId, assertExecution);
+      }
+      await assertExecution();
+      await repository.updateJob(workspaceId, jobId, calculateFinalJobStatus(finalTargets), finalTargets, executionId);
+    } catch (error) {
+      if (lost || error instanceof PublishExecutionChangedError) return;
+      // Storage failures leave the lease to expire; do not replace an ambiguous success with failure.
+      console.error("Publish execution interrupted; recovery will verify its outcome", { jobId });
+    } finally { clearInterval(heartbeat); }
+  }
+
+  let draining: Promise<void> | undefined;
+  let stopped = false;
+  let worker: ReturnType<typeof setInterval> | undefined;
+  function resumePendingJobs() {
+    if (stopped) return Promise.resolve();
+    if (draining) return draining;
+    draining = (async () => {
+      for (const job of await repository.listRunnableJobs()) {
+        if (stopped) break;
+        await executeJob(job.workspaceId, job.id, job.status === "processing");
+      }
+    })().finally(() => { draining = undefined; });
+    return draining;
+  }
+
   return {
+    resumePendingJobs,
+    startWorker() {
+      if (worker) return;
+      stopped = false;
+      const tick = () => { void resumePendingJobs().catch(() => console.error("Could not process publish queue")); };
+      worker = setInterval(tick, 15_000);
+      worker.unref();
+      tick();
+    },
+    async stopWorker() {
+      stopped = true;
+      clearInterval(worker);
+      worker = undefined;
+      await draining;
+    },
     buildPublishPreview,
     buildChannelDraft(product: Product, channelId: ChannelId, connection?: ChannelConnectionRecord) {
       return registry.buildDraft(product, channelId, connection);
@@ -212,49 +329,15 @@ export function createPublishingService(
         productId: input.product.id,
         productTitle: input.product.title,
         productSnapshot: input.product,
+        connectionRevisions: Object.fromEntries(queuedTargets.flatMap(target => {
+          const record = input.connectionRecords.find(item => item.connection.id === target.connectionId);
+          return record ? [[target.id, connectionRevision(record, env.ebayEnvironment)]] : [];
+        })),
         status: "queued",
         targets: queuedTargets
       });
 
-      let claimedJob = false;
-      void (async () => {
-        const execution = await repository.claimJob(input.workspaceId, job.id);
-        if (!execution) return;
-        claimedJob = true;
-        const confirmedProduct = await repository.getJobProduct(input.workspaceId, job.id);
-        if (!confirmedProduct) throw new Error("No confirmed product snapshot is available for this job.");
-        const processingTargets = execution.targets;
-
-        const finalTargets = await processTargets(
-          env,
-          input.workspaceId,
-          listings,
-          repository,
-          channelConnectionRepository,
-          confirmedProduct,
-          processingTargets
-        );
-        await repository.updateJob(
-          input.workspaceId,
-          job.id,
-          calculateFinalJobStatus(finalTargets),
-          finalTargets
-        );
-      })().catch(async () => {
-        // An ambiguous/failed claim must not overwrite a competing executor's job.
-        if (!claimedJob) {
-          console.error("Could not acquire publish job", { jobId: job.id });
-          return;
-        }
-        const targets = job.targets.map(target => ({
-          ...target,
-          status: "failed" as const,
-          message: "The publishing task was interrupted. Check the connected store before retrying."
-        }));
-        await repository.updateJob(input.workspaceId, job.id, "failed", targets);
-      }).catch(() => {
-        console.error("Could not persist publish job outcome", { jobId: job.id });
-      });
+      void resumePendingJobs().catch(() => console.error("Could not process publish queue"));
 
       return job;
     },

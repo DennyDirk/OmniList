@@ -2,7 +2,8 @@ import { isDeepStrictEqual } from "node:util";
 import { and, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { ChannelId, RemoteListingReference } from "@omnilist/shared";
 import type { DbClient } from "../../db/client";
-import { channelConnectionsTable, channelListingsTable as table, productsTable, workspacesTable } from "../../db/schema";
+import { channelConnectionsTable, channelListingsTable as table, productsTable, workspacesTable, publishJobsTable } from "../../db/schema";
+import type { ChannelPublishCheckpoint } from "./adapters/channel-publish.contract";
 
 export interface ListingIdentity {
   workspaceId: string;
@@ -19,7 +20,8 @@ export interface ChannelListing extends ListingIdentity {
   id: string;
   remoteListing: RemoteListingReference | null;
   status: "pending" | "publishing" | "published" | "failed" | "needs_review";
-  executionStage: "claimed" | "inventory_written" | "offer_saved" | "publish_requested" | "finished";
+  executionStage: "claimed" | ChannelPublishCheckpoint["stage"] | "finished";
+  executionId: string | null;
   attemptRevision: string | null;
   appliedRevision: string | null;
   lastPublishedAt: Date | null;
@@ -27,23 +29,32 @@ export interface ChannelListing extends ListingIdentity {
 }
 
 export class ListingOwnershipError extends Error {}
+type ListingVersion = Pick<ChannelListing, "updatedAt" | "executionId" | "attemptRevision">;
+function matchesVersion(listing: ChannelListing, version: ListingVersion) {
+  return listing.updatedAt.getTime() === version.updatedAt.getTime() && listing.executionId === version.executionId
+    && listing.attemptRevision === version.attemptRevision;
+}
+function versionScope(version: ListingVersion) {
+  return and(eq(table.updatedAt, version.updatedAt),
+    version.executionId ? eq(table.executionId, version.executionId) : isNull(table.executionId),
+    version.attemptRevision ? eq(table.attemptRevision, version.attemptRevision) : isNull(table.attemptRevision));
+}
 
 export interface ChannelListingRepository {
   get(identity: ListingIdentity): Promise<ChannelListing | undefined>;
-  reconcileActive(identity: ListingIdentity, expected: RemoteListingReference, confirmed: RemoteListingReference): Promise<void>;
-  markRetryable(identity: ListingIdentity, expected?: RemoteListingReference): Promise<void>;
+  reconcileActive(identity: ListingIdentity, expected: RemoteListingReference, confirmed: RemoteListingReference, version?: ListingVersion): Promise<void>;
+  markRetryable(identity: ListingIdentity, expected?: RemoteListingReference, version?: ListingVersion): Promise<void>;
   listInterrupted(): Promise<ChannelListing[]>;
+  interruptExecution(workspaceId: string, executionId: string): Promise<ChannelListing[]>;
   reserve(identity: ListingIdentity): Promise<ChannelListing>;
-  claim(identity: ListingIdentity, revision?: string): Promise<ChannelListing>;
-  recordCheckpoint(identity: ListingIdentity, revision: string, checkpoint: {
-    stage: "inventory_written" | "offer_saved" | "publish_requested";
-    remoteListing?: RemoteListingReference;
-  }): Promise<void>;
+  claim(identity: ListingIdentity, revision?: string, executionId?: string): Promise<ChannelListing>;
+  recordCheckpoint(identity: ListingIdentity, revision: string, checkpoint: ChannelPublishCheckpoint, executionId?: string): Promise<void>;
   recordResult(identity: ListingIdentity, result: {
     status: "published" | "failed";
     remoteListing?: RemoteListingReference;
     revision: string;
     requiresReconciliation?: boolean;
+    executionId?: string;
   }): Promise<void>;
 }
 
@@ -74,9 +85,10 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
       assertIdentity(listing, identity);
       return structuredClone(listing);
     },
-    async reconcileActive(identity, expected, confirmed) {
+    async reconcileActive(identity, expected, confirmed, version) {
       const listing = await this.get(identity);
-      if (!listing || listing.status !== "needs_review" || !isDeepStrictEqual(listing.remoteListing, expected)) {
+      if (!listing || listing.status !== "needs_review" || !isDeepStrictEqual(listing.remoteListing, expected)
+        || (version && !matchesVersion(listing, version))) {
         throw new ListingOwnershipError("The listing changed. Verify it again before recovery.");
       }
       if (expected.channelId !== "ebay" || confirmed.channelId !== "ebay"
@@ -92,28 +104,32 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
       if (db) {
         const [updated] = await db.update(table).set(update).where(and(productScope(identity),
           eq(table.status, "needs_review"), eq(table.remoteListing, expected),
+          versionScope(version ?? listing),
           eq(table.externalAccountId, identity.externalAccountId), eq(table.sku, identity.sku))).returning();
         if (!updated) throw new ListingOwnershipError("The listing changed. Verify it again before recovery.");
       } else {
         const current = memory.get(key(identity));
-        if (!current || current.status !== "needs_review" || !isDeepStrictEqual(current.remoteListing, expected)) {
+        if (!current || current.status !== "needs_review" || !isDeepStrictEqual(current.remoteListing, expected)
+          || !matchesVersion(current, version ?? listing)) {
           throw new ListingOwnershipError("The listing changed. Verify it again before recovery.");
         }
         memory.set(key(identity), { ...current, ...update });
       }
     },
-    async markRetryable(identity, expected) {
+    async markRetryable(identity, expected, version) {
       const update = { status: "failed" as const, executionStage: "finished" as const, updatedAt: new Date() };
       if (db) {
         const remoteCondition = expected ? eq(table.remoteListing, expected) : isNull(table.remoteListing);
         const [updated] = await db.update(table).set(update).where(and(productScope(identity),
           eq(table.status, "needs_review"), remoteCondition,
+          version ? versionScope(version) : undefined,
           eq(table.externalAccountId, identity.externalAccountId), eq(table.sku, identity.sku))).returning();
         if (!updated) throw new ListingOwnershipError("The listing changed while making it retryable.");
         return;
       }
       const current = memory.get(key(identity));
-      if (!current || current.status !== "needs_review" || !isDeepStrictEqual(current.remoteListing ?? undefined, expected)) {
+      if (!current || current.status !== "needs_review" || !isDeepStrictEqual(current.remoteListing ?? undefined, expected)
+        || (version && !matchesVersion(current, version))) {
         throw new ListingOwnershipError("The listing changed while making it retryable.");
       }
       memory.set(key(identity), { ...current, ...update });
@@ -123,9 +139,28 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
         : [...memory.values()].filter(item => item.status === "publishing" || item.status === "needs_review");
       return structuredClone(items);
     },
+    async interruptExecution(workspaceId, executionId) {
+      if (db) {
+        // Recovery has already fenced the old job owner. Never interrupt a renewed execution.
+        const scope = and(eq(table.workspaceId, workspaceId), eq(table.executionId, executionId));
+        await db.update(table).set({ status: "needs_review", updatedAt: new Date() }).where(and(scope,
+          eq(table.status, "publishing"), sql`not exists (select 1 from ${publishJobsTable} where
+            ${publishJobsTable.workspaceId} = ${workspaceId} and ${publishJobsTable.executionId} = ${executionId}
+            and ${publishJobsTable.status} = 'processing' and ${publishJobsTable.leaseExpiresAt} > clock_timestamp())`));
+        return db.select().from(table).where(scope);
+      }
+      const items: ChannelListing[] = [];
+      for (const [id, listing] of memory) {
+        if (listing.workspaceId !== workspaceId || listing.executionId !== executionId) continue;
+        const stopped = listing.status === "publishing" ? { ...listing, status: "needs_review" as const, updatedAt: new Date() } : listing;
+        memory.set(id, stopped);
+        items.push(stopped);
+      }
+      return structuredClone(items);
+    },
     async reserve(identity) {
       const initial: ChannelListing = { ...identity, id: crypto.randomUUID(), remoteListing: null,
-        status: "pending", executionStage: "claimed", attemptRevision: null,
+        status: "pending", executionStage: "claimed", executionId: null, attemptRevision: null,
         appliedRevision: null, lastPublishedAt: null, updatedAt: new Date() };
       if (db) {
         // Both unique constraints arbitrate concurrent reservations in PostgreSQL.
@@ -142,10 +177,18 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
       assertIdentity(listing, identity);
       return structuredClone(listing);
     },
-    async claim(identity, revision = "unknown") {
+    async claim(identity, revision = "unknown", executionId) {
       const message = "This listing is already publishing or requires verification after an interrupted attempt. No new request was sent to the store.";
       if (db) {
         return db.transaction(async tx => {
+          if (executionId) {
+            const [owner] = await tx.select({ id: publishJobsTable.id }).from(publishJobsTable).where(and(
+              eq(publishJobsTable.workspaceId, identity.workspaceId), eq(publishJobsTable.productId, identity.productId),
+              eq(publishJobsTable.executionId, executionId), eq(publishJobsTable.status, "processing"),
+              isNull(publishJobsTable.recoveryOf),
+              sql`${publishJobsTable.leaseExpiresAt} > clock_timestamp()`)).for("update");
+            if (!owner) throw new ListingOwnershipError("The publish execution is no longer active.");
+          }
           // Import and publish use this same lock, so either operation observes the other's committed identity.
           const [workspace] = await tx.select({ id: workspacesTable.id }).from(workspacesTable)
             .where(eq(workspacesTable.id, identity.workspaceId)).for("update");
@@ -170,13 +213,13 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
             }
           }
           const initial: ChannelListing = { ...identity, id: crypto.randomUUID(), remoteListing: null,
-            status: "pending", executionStage: "claimed", attemptRevision: null,
+            status: "pending", executionStage: "claimed", executionId: null, attemptRevision: null,
             appliedRevision: null, lastPublishedAt: null, updatedAt: new Date() };
           await tx.insert(table).values(initial).onConflictDoNothing();
           const [listing] = await tx.select().from(table).where(productScope(identity)).limit(1);
           assertIdentity(listing, identity);
           const [claimed] = await tx.update(table).set({ status: "publishing", executionStage: "claimed",
-            attemptRevision: revision, updatedAt: new Date() })
+            attemptRevision: revision, executionId: executionId ?? null, updatedAt: new Date() })
             .where(and(productScope(identity), inArray(table.status, ["pending", "published", "failed"]))).returning();
           if (!claimed) throw new ListingOwnershipError(message);
           return claimed;
@@ -186,13 +229,13 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
       const current = memory.get(key(identity))!;
       if (current.status === "publishing" || current.status === "needs_review") throw new ListingOwnershipError(message);
       const claimed = { ...listing, status: "publishing" as const, executionStage: "claimed" as const,
-        attemptRevision: revision, updatedAt: new Date() };
+        attemptRevision: revision, executionId: executionId ?? null, updatedAt: new Date() };
       memory.set(key(identity), claimed);
       return structuredClone(claimed);
     },
-    async recordCheckpoint(identity, revision, checkpoint) {
+    async recordCheckpoint(identity, revision, checkpoint, executionId) {
       const listing = await this.get(identity);
-      if (!listing || listing.status !== "publishing" || listing.attemptRevision !== revision) {
+      if (!listing || listing.status !== "publishing" || listing.attemptRevision !== revision || listing.executionId !== (executionId ?? null)) {
         throw new ListingOwnershipError("The publish attempt changed before its checkpoint was saved.");
       }
       const remote = checkpoint.remoteListing;
@@ -204,11 +247,12 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
       if (db) {
         const [updated] = await db.update(table).set(update).where(and(productScope(identity),
           eq(table.status, "publishing"), eq(table.attemptRevision, revision),
+          executionId ? eq(table.executionId, executionId) : isNull(table.executionId),
           eq(table.externalAccountId, identity.externalAccountId), eq(table.sku, identity.sku))).returning();
         if (!updated) throw new ListingOwnershipError("The publish attempt changed before its checkpoint was saved.");
       } else {
         const current = memory.get(key(identity));
-        if (!current || current.status !== "publishing" || current.attemptRevision !== revision) {
+        if (!current || current.status !== "publishing" || current.attemptRevision !== revision || current.executionId !== (executionId ?? null)) {
           throw new ListingOwnershipError("The publish attempt changed before its checkpoint was saved.");
         }
         memory.set(key(identity), { ...current, ...update });
@@ -220,7 +264,7 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
         : memory.get(key(identity));
       assertIdentity(listing, identity);
       if (listing.status !== "publishing") throw new ListingOwnershipError("The listing is not claimed for publication.");
-      if (listing.attemptRevision !== result.revision) {
+      if (listing.attemptRevision !== result.revision || listing.executionId !== (result.executionId ?? null)) {
         throw new ListingOwnershipError("The publish attempt changed before its result was saved.");
       }
       const remote = result.remoteListing;
@@ -243,7 +287,8 @@ export function createChannelListingRepository(db?: DbClient): ChannelListingRep
       };
       if (db) {
         const [updated] = await db.update(table).set(update).where(and(productScope(identity),
-          eq(table.status, "publishing"), eq(table.attemptRevision, result.revision))).returning();
+          eq(table.status, "publishing"), eq(table.attemptRevision, result.revision),
+          result.executionId ? eq(table.executionId, result.executionId) : isNull(table.executionId))).returning();
         if (!updated) throw new ListingOwnershipError("The publish attempt changed before its result was saved.");
       } else memory.set(key(identity), { ...listing, ...update });
     }

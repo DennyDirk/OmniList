@@ -78,6 +78,8 @@ export async function buildApp() {
   const channelAuthService = createChannelAuthService(channelConnectionRepository, env);
   const listingRepository = createChannelListingRepository(db);
   const publishingService = createPublishingService(publishJobRepository, channelConnectionRepository, env, listingRepository);
+  app.addHook("onReady", async () => { publishingService.startWorker(); });
+  app.addHook("onClose", async () => { await publishingService.stopWorker(); });
   const ebayRecoveryService = createEbayRecoveryService(channelConnectionRepository, listingRepository, env);
   const ebayActiveCatalogService = createEbayActiveCatalogService(channelConnectionRepository, env, productImportRepository);
   const workspaceService = createWorkspaceService(workspaceRepository, productRepository);

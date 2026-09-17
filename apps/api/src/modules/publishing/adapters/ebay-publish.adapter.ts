@@ -303,6 +303,8 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
         }
       }
 
+      await execution?.checkpoint({ stage: "inventory_write_requested",
+        ...(existingOffer ? { remoteListing: reference(existingOffer.offerId, existingOffer.listing?.listingId) } : {}) });
       const inventoryResponse = await callEbayInventoryApi<{ errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
         path: `/sell/inventory/v1/inventory_item/${encodeURIComponent(sku)}`,
         method: "PUT",
@@ -325,6 +327,7 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
       const shouldCreateOffer = !offerId;
 
       if (offerId) {
+        await execution?.checkpoint({ stage: "offer_write_requested", remoteListing: reference(offerId, existingOffer?.listing?.listingId) });
         const updateResponse = await callEbayInventoryApi<{ errors?: EbayApiErrorShape[] }>(env, auth.accessToken, {
           path: `/sell/inventory/v1/offer/${encodeURIComponent(offerId)}`,
           method: "PUT",
@@ -347,9 +350,11 @@ export function createEbayPublishAdapter(env: ApiEnv): ChannelPublishAdapter {
             updatedCredentials: auth.credentials
           };
         }
+        await execution?.checkpoint({ stage: "offer_saved", remoteListing: reference(offerId) });
       }
 
       if (shouldCreateOffer) {
+        await execution?.checkpoint({ stage: "offer_write_requested" });
         const createOfferResponse = await callEbayInventoryApi<{
           offerId?: string;
           errors?: EbayApiErrorShape[];

@@ -49,8 +49,14 @@ export function createEbayRecoveryService(connections: ChannelConnectionReposito
   async function recoverListing(candidate: ChannelListing): Promise<EbayRecoveryOutcome> {
     const listing = await listings.get(identityOf(candidate));
     if (!listing || listing.status !== "needs_review") throw new EbayRecoveryError(409, "No stopped publication is available for safe recovery.");
+    if (listing.executionId !== candidate.executionId || listing.attemptRevision !== candidate.attemptRevision
+      || listing.updatedAt.getTime() !== candidate.updatedAt.getTime()) throw new EbayRecoveryError(409, "The publication changed during recovery.");
     if (listing.channelId !== "ebay") throw new EbayRecoveryError(409, "Only eBay publication recovery is available.");
     const identity = identityOf(listing);
+    if (listing.executionId && ["inventory_write_requested", "offer_write_requested"].includes(listing.executionStage)) {
+      return { productId: listing.productId, connectionId: listing.connectionId, status: "needs_review",
+        message: "An eBay write may still be in progress. Its result cannot be inferred from the listing status. No automatic retry was enabled." };
+    }
     const found = await connections.getConnectionRecordById(listing.workspaceId, listing.connectionId);
     if (!matchesConnection(listing, found)) {
       return { productId: listing.productId, connectionId: listing.connectionId, status: "needs_review",
@@ -78,13 +84,13 @@ export function createEbayRecoveryService(connections: ChannelConnectionReposito
           message: "The recovered eBay offer does not match the saved product. No retry was enabled." };
       }
       if (offer.status === "PUBLISHED" && offer.listingStatus === "ACTIVE" && offer.listingId) {
-        await listings.reconcileActive(identity, saved, { ...saved, listingId: offer.listingId });
+        await listings.reconcileActive(identity, saved, { ...saved, listingId: offer.listingId }, listing);
         return { productId: listing.productId, connectionId: listing.connectionId, status: "published",
           listingId: offer.listingId, url: offer.url, revisionVerified: false, remoteListing: { ...saved, listingId: offer.listingId },
           message: `Recovered active eBay listing ${offer.listingId}.` };
       }
-      if (offer.status === "UNPUBLISHED" && !offer.listingId) {
-        await listings.markRetryable(identity, saved);
+      if (offer.status === "UNPUBLISHED" && !offer.listingId && listing.executionStage !== "publish_requested") {
+        await listings.markRetryable(identity, saved, listing);
         return { productId: listing.productId, connectionId: listing.connectionId, status: "retryable",
           remoteListing: saved, message: "The saved eBay offer is unpublished. It is safe to retry without creating another offer." };
       }
@@ -98,6 +104,7 @@ export function createEbayRecoveryService(connections: ChannelConnectionReposito
   }
 
   return {
+    recoverListing,
     async recover(workspaceId: string, product: { id: string; sku: string }) {
       const found = await connections.getConnectionRecord(workspaceId, "ebay");
       if (!found || found.connection.status !== "connected") throw new EbayRecoveryError(409, "Connect eBay before recovering the listing.");

@@ -1,4 +1,4 @@
-import { integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/pg-core";
+import { index, integer, jsonb, numeric, pgTable, text, timestamp, uniqueIndex, varchar } from "drizzle-orm/pg-core";
 
 import type { ChannelId, Product, ProductAsset, ProductChannelOverride, ProductVariant, RemoteListingReference, ProductSource } from "@omnilist/shared";
 import { sql } from "drizzle-orm";
@@ -90,11 +90,14 @@ export const publishJobsTable = pgTable("publish_jobs", {
     .notNull(),
   productTitle: varchar("product_title", { length: 255 }).notNull(),
   productSnapshot: jsonb("product_snapshot").$type<Product>(),
+  connectionRevisions: jsonb("connection_revisions").$type<Record<string, string>>(),
+  leaseExpiresAt: timestamp("lease_expires_at", { withTimezone: true }),
+  recoveryOf: varchar("recovery_of", { length: 64 }),
   executionId: varchar("execution_id", { length: 64 }),
   status: varchar("status", { length: 32 }).notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
-});
+}, table => ({ worker: index("publish_jobs_worker").on(table.status, table.leaseExpiresAt, table.createdAt) }));
 
 export const publishJobTargetsTable = pgTable("publish_job_targets", {
   id: varchar("id", { length: 64 }).primaryKey(),
@@ -139,7 +142,8 @@ export const channelListingsTable = pgTable("channel_listings", {
   externalAccountId: text("external_account_id").notNull(),
   remoteListing: jsonb("remote_listing").$type<RemoteListingReference>(),
   status: varchar("status", { length: 32 }).$type<"pending" | "publishing" | "published" | "failed" | "needs_review">().notNull(),
-  executionStage: varchar("execution_stage", { length: 32 }).$type<"claimed" | "inventory_written" | "offer_saved" | "publish_requested" | "finished">().notNull().default("claimed"),
+  executionStage: varchar("execution_stage", { length: 32 }).$type<"claimed" | "inventory_write_requested" | "inventory_written" | "offer_write_requested" | "offer_saved" | "publish_requested" | "finished">().notNull().default("claimed"),
+  executionId: varchar("execution_id", { length: 64 }),
   attemptRevision: varchar("attempt_revision", { length: 64 }),
   appliedRevision: varchar("applied_revision", { length: 64 }),
   lastPublishedAt: timestamp("last_published_at", { withTimezone: true }),
