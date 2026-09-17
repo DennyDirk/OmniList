@@ -6,6 +6,7 @@ import { ensureValidEbayAccessToken } from "../channels/adapters/ebay-client";
 import type { ChannelConnectionRecord, ChannelConnectionRepository } from "../channels/channel-connections.repository";
 import { createEbayPublishAdapter } from "../publishing/adapters/ebay-publish.adapter";
 import type { ApiEnv } from "../../config/env";
+import { connectionRevision } from "../publishing/connection-revision";
 
 export type { UnifiedAssessment } from "@omnilist/shared";
 
@@ -22,6 +23,7 @@ export class UnifiedAssessmentService {
       connection: connection?.connection, environment: this.env.ebayEnvironment })).digest("hex");
     const finish = (status: UnifiedAssessment["status"]): UnifiedAssessment => ({
       productId: product.id, channelId, connectionId: connection?.connection.id,
+      connectionRevision: connection ? connectionRevision(connection, this.env.ebayEnvironment) : undefined,
       status, score: status === "ready" ? base.score : 0, issues, revision, checkedAt: new Date().toISOString()
     });
     const block = (code: string, field: string, message: string) => issues.push({ code, field, message, severity: "blocking" });

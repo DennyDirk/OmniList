@@ -3,13 +3,15 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState, useTransition } from "react";
-import { assessmentSchema, canPublishAssessment, getEffectiveProductForChannel, type UnifiedAssessment, type ChannelConnection, type Product } from "@omnilist/shared";
+import { canPublishAssessment, type UnifiedAssessment, type ChannelConnection, type Product } from "@omnilist/shared";
 import { dictionaries, type Locale } from "../lib/i18n";
 import { publishCopy } from "../lib/publish-copy";
 import { useFlash } from "./flash-provider";
 import { assessmentCopy } from "../lib/assessment-copy";
 import { publishFlowCopy } from "../lib/publish-flow-copy";
 import { ProductEditor } from "./product-editor";
+import { EbayPublishPreview } from "./ebay-publish-preview";
+import { PublishReviewError, readPublishAssessment } from "../lib/publish-review";
 
 export function PublishProductCard({ apiBaseUrl, product, connection, active, hasPublished, locale }: {
   apiBaseUrl: string; product: Product; connection?: ChannelConnection; active: boolean; hasPublished: boolean; locale: Locale;
@@ -27,10 +29,9 @@ export function PublishProductCard({ apiBaseUrl, product, connection, active, ha
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState(false);
   const [stale, setStale] = useState(false);
-  const staleMessage = locale === "ru" ? "Товар изменился. Обновите данные, повторите проверку и подтвердите новый preview."
-    : locale === "uk" ? "Товар змінився. Оновіть дані, повторіть перевірку та підтвердьте новий preview."
-    : "The product changed. Reload it, check it again and confirm the new preview.";
-  const effective = getEffectiveProductForChannel(product, "ebay");
+  const staleMessage = locale === "ru" ? "Товар или магазин изменился. Обновите данные, повторите проверку и подтвердите новый preview."
+    : locale === "uk" ? "Товар або магазин змінився. Оновіть дані, повторіть перевірку та підтвердьте новий preview."
+    : "The product or store changed. Reload, check again and confirm the new preview.";
   const controller = useRef<AbortController | null>(null);
   useEffect(() => () => controller.current?.abort(), []);
   const lock = useRef(false);
@@ -61,22 +62,18 @@ export function PublishProductCard({ apiBaseUrl, product, connection, active, ha
     const current = new AbortController();
     controller.current = current;
     setAssessment(undefined);
-    const response = await fetch(`${apiBaseUrl}/products/${encodeURIComponent(product.id)}/readiness?channels=ebay`, {
-      credentials: "include", cache: "no-store", signal: current.signal
-    });
-    if (!response.ok) throw new Error(text.checkFailed);
-    const body = await response.json().catch(() => undefined);
-    if (!product.revision || body?.productRevision !== product.revision) {
-      setStale(true); setPreview(false);
-      throw new Error(staleMessage);
+    if (!connection) throw new Error(text.checkFailed);
+    try {
+      const next = await readPublishAssessment(apiBaseUrl, product, connection, current.signal);
+      setAssessment(next);
+      return next;
+    } catch (error) {
+      if (error instanceof PublishReviewError && error.reason === "stale") {
+        setStale(true); setPreview(false);
+        throw new Error(staleMessage);
+      }
+      throw new Error(text.checkFailed);
     }
-    const parsed = assessmentSchema.safeParse(body?.items?.[0]);
-    if (!parsed.success) throw new Error(text.checkFailed);
-    const next = parsed.data;
-    if (next.productId !== product.id || next.channelId !== "ebay" || next.connectionId !== connection?.id) throw new Error(text.checkFailed);
-    if (current.signal.aborted) throw new Error(text.checkFailed);
-    setAssessment(next);
-    return next;
   }
 
   async function check() {
@@ -99,10 +96,14 @@ export function PublishProductCard({ apiBaseUrl, product, connection, active, ha
     try {
       const next = await checkReadiness();
       if (!canPublishAssessment(next)) { setPreview(false); return; }
+      if (next.connectionRevision !== assessment?.connectionRevision) {
+        setStale(true); setPreview(false);
+        throw new Error(staleMessage);
+      }
       setPhase("sending");
       sending = true;
       const result = await fetch(apiBaseUrl + "/products/" + product.id + "/publish", {
-        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channels: ["ebay"], productRevision: product.revision })
+        method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channels: ["ebay"], productRevision: product.revision, connectionRevisions: { ebay: next.connectionRevision } })
       });
       if (!result.ok) {
         if (result.status === 409) { setStale(true); setPreview(false); setAssessment(undefined); throw new Error(staleMessage); }
@@ -150,11 +151,7 @@ export function PublishProductCard({ apiBaseUrl, product, connection, active, ha
     {active ? <p role="status">{text.pending}</p> : <p className="field-hint">{text.checkHint}</p>}
     {preview && !blocked ? <section className="listing-section" aria-label={flow.preview}>
       <h3>{flow.preview}</h3><p className="field-hint">{flow.hint}</p>
-      <h4>{effective.title}</h4>
-      <div className="listing-photos">{product.images.map(image => <div className="listing-photo" key={image.id}><img src={image.url} alt={image.altText || effective.title} /></div>)}</div>
-      <p className="listing-description">{effective.description}</p>
-      <p><strong>{new Intl.NumberFormat(locale, { style: "currency", currency: product.currency }).format(effective.basePrice)}</strong> · {text.count}: {product.quantity}</p>
-      <p>{flow.category}: {product.channelOverrides.ebay?.categoryId} · {flow.condition}: {product.channelOverrides.ebay?.condition}</p>
+      <EbayPublishPreview product={product} locale={locale} />
       <button className="button-secondary" type="button" disabled={busy} onClick={() => setPreview(false)}>{flow.back}</button>
       <button className="button-primary" disabled={busy} type="button" onClick={() => void publish()}>{phase === "checking" ? text.checking : phase === "sending" ? text.sending : hasPublished ? text.update : flow.confirm}</button>
     </section> : <button className="button-primary" disabled={busy || blocked} type="button" onClick={() => setPreview(true)}>{active ? dictionary.common.refreshing : flow.preview}</button>}

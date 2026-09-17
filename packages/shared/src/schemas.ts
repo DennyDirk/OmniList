@@ -138,12 +138,20 @@ export const publishPreviewRequestSchema = z.object({
 
 export const publishJobRequestSchema = z.object({
   productRevision: z.string().regex(/^[a-f0-9]{64}$/),
-  channels: z.array(channelIdSchema).min(1).optional()
+  channels: z.array(channelIdSchema).min(1).max(3),
+  connectionRevisions: z.partialRecord(channelIdSchema, z.string().regex(/^[a-f0-9]{64}$/))
+}).refine(value => value.channels.every(channel => value.connectionRevisions[channel]), {
+  message: "Check every selected store before publishing."
 });
 
 export const bulkPublishJobRequestSchema = z.object({
-  productIds: z.array(z.string().min(1)).min(1),
-  channels: z.array(channelIdSchema).min(1)
+  products: z.array(z.object({ productId: z.string().min(1), productRevision: z.string().regex(/^[a-f0-9]{64}$/) })).min(1).max(20),
+  channels: z.array(channelIdSchema).min(1).max(3),
+  connectionRevisions: z.partialRecord(channelIdSchema, z.string().regex(/^[a-f0-9]{64}$/))
+}).refine(value => new Set(value.products.map(item => item.productId)).size === value.products.length, {
+  message: "Select each product only once."
+}).refine(value => value.channels.every(channel => value.connectionRevisions[channel]), {
+  message: "Check every selected store before publishing."
 });
 
 export const inventoryMovementSchema = z.object({

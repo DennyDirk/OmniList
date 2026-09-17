@@ -59,6 +59,9 @@
 .listing-publish .listing-section { border-block: 1px solid var(--line); padding-block: 18px; gap: 8px; }
 .listing-publish ul { padding-left: 20px; }
 .listing-publish li { margin-bottom: 8px; }
+.bulk-selection { border: 0; padding: 0; margin: 0; min-width: 0; }
+.bulk-selection legend { font-weight: 600; margin-bottom: 12px; }
+.bulk-selection .bulk-product-meta { min-width: 0; overflow-wrap: anywhere; }
 .listing-history { box-shadow: none; }
 .listing-history h2 { font-size: 1rem; }
 .listing-result-message { font-size: .9rem; line-height: 1.6; overflow-wrap: anywhere; }

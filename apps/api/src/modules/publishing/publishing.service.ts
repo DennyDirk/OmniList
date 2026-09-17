@@ -15,6 +15,7 @@ import {
 
 import { PublishExecutionChangedError, type PublishJobRepository } from "./publishing.repository";
 import { connectionRevision } from "./connection-revision";
+import { assertConfirmedConnections } from "./publish-confirmation";
 import { createEbayRecoveryService } from "./ebay-recovery.service";
 import { validateProductAcrossChannels } from "../validation/validation.service";
 import { UnifiedAssessmentService } from "../validation/assessment.service";
@@ -311,6 +312,7 @@ export function createPublishingService(
       workspaceId: string;
       product: Product;
       expectedRevision?: string;
+      expectedConnectionRevisions?: Partial<Record<ChannelId, string>>;
       channelIds: ChannelId[];
       connections: ChannelConnection[];
       connectionRecords: ChannelConnectionRecord[];
@@ -318,6 +320,10 @@ export function createPublishingService(
       input = { ...input, product: structuredClone(input.product) };
       if (input.expectedRevision && withProductRevision(input.product).revision !== input.expectedRevision) {
         throw new ProductWriteError("The product changed after preview. Reload it, check it again and confirm the new preview. Nothing was queued.");
+      }
+      if (input.expectedConnectionRevisions) {
+        assertConfirmedConnections(input.workspaceId, input.channelIds, input.expectedConnectionRevisions,
+          input.connectionRecords, env.ebayEnvironment);
       }
       const queuedTargets = toQueuedTargets(input.product, [...new Set(input.channelIds)]).map(target => ({
         ...target,
