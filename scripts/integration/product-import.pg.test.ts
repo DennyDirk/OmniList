@@ -11,6 +11,7 @@ import { createProductRepository } from "../../apps/api/src/modules/catalog/cata
 import { createProductImportRepository } from "../../apps/api/src/modules/catalog/product-import.repository";
 import { createChannelListingRepository, type ListingIdentity } from "../../apps/api/src/modules/publishing/channel-listings.repository";
 import { createPublishJobRepository } from "../../apps/api/src/modules/publishing/publishing.repository";
+import { createChannelOAuthAttemptRepository } from "../../apps/api/src/modules/channels/channel-oauth-attempts.repository";
 
 // Explicit opt-in; never fall back to the application's DATABASE_URL.
 test("PostgreSQL product import and migration contracts", { skip: !process.env.TEST_DATABASE_URL }, async t => {
@@ -194,7 +195,7 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
       const stopped = await listingsB.interruptExecution("workspace", owner.executionId!);
       assert.equal(stopped[0].status, "needs_review");
       await assert.rejects(listingsA.recordCheckpoint(identity, "same-payload", { stage: "offer_saved" }, owner.executionId), /attempt changed/);
-      await listingsB.markRetryable(identity);
+      await listingsB.markRetryable(identity, undefined, stopped[0]);
       await assert.rejects(listingsA.claim(identity, "same-payload", owner.executionId), /no longer active/);
       await assert.rejects(listingsB.claim(identity, "same-payload", recovery.executionId), /no longer active/);
       const next = await writer.createJob({ workspaceId: "workspace", productId: item.id, productTitle: item.title,
@@ -202,6 +203,12 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
       const nextOwner = (await reader.claimJob("workspace", next.id))!;
       await listingsB.claim(identity, "same-payload", nextOwner.executionId);
       await assert.rejects(listingsA.recordResult(identity, { status: "failed", revision: "same-payload", executionId: owner.executionId }), /attempt changed/);
+      await listingsB.recordResult(identity, { status: "failed", revision: "same-payload", executionId: nextOwner.executionId, requiresReconciliation: true });
+      await assert.rejects(listingsA.markRetryable(identity, undefined, stopped[0]), /listing changed/);
+      const latest = (await listingsB.get(identity))!;
+      assert.equal(latest.status, "needs_review", "A late repair must not unlock a newer attempt");
+      await listingsB.markRetryable(identity, undefined, latest);
+      assert.equal((await listingsB.get(identity))?.status, "failed");
       await coordinator.query("UPDATE publish_jobs SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1", [job.id]);
       assert.equal((await writer.claimRecovery("workspace", job.id))?.recoveryOf, owner.executionId);
     });
@@ -361,6 +368,80 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
       await a.query("UPDATE channel_connections SET status='disconnected'");
       await assert.rejects(importerB.importProduct("workspace", input), /connection changed/);
       assert.equal(await count(), 1);
+    });
+    await t.test("0013 preserves connections and makes OAuth attempts durable, single-use and fenced", async () => {
+      await reset();
+      const before = (await coordinator.query("SELECT to_jsonb(c) AS row FROM channel_connections c")).rows;
+      await coordinator.query(await migration("0013_channel_oauth_attempts"));
+      const protectedTables = (await coordinator.query("SELECT relname,relrowsecurity FROM pg_class WHERE relnamespace=$1::regnamespace AND relname IN ('channel_connections','channel_oauth_attempts')", [namespace])).rows;
+      assert.equal(protectedTables.length, 2);
+      assert.ok(protectedTables.every(row => row.relrowsecurity));
+      assert.deepEqual((await coordinator.query("SELECT to_jsonb(c) AS row FROM channel_connections c")).rows, before);
+      await coordinator.query(`INSERT INTO channel_connections (id,workspace_id,channel_id,status,metadata,credentials)
+        VALUES ('etsy','workspace','etsy','disconnected','{}','{}')`);
+      const writer = createChannelOAuthAttemptRepository(dbA), reader = createChannelOAuthAttemptRepository(dbB);
+      const attempt = { id: "first", workspaceId: "workspace", channelId: "etsy" as const,
+        connectionId: "etsy", browserHash: "browser", verifier: "server-only", expiresAt: new Date(Date.now() + 600_000) };
+      const result = { externalAccountId: "456", publicMetadata: { shopName: "TestShop" }, credentials: { accessToken: "test-token" } };
+      await assert.rejects(writer.start({ ...attempt, workspaceId: "wrong-workspace" }), /INVALID_CHANNEL_CONNECT_STATE/);
+      await writer.start(attempt);
+      assert.equal(await reader.claim("first", "wrong-browser", "etsy"), undefined);
+      assert.equal(await reader.claim("first", "browser", "ebay"), undefined);
+      const claims = await Promise.all([writer.claim("first", "browser", "etsy"), reader.claim("first", "browser", "etsy")]);
+      assert.equal(claims.filter(Boolean).length, 1);
+      assert.equal(claims.find(Boolean)?.verifier, "server-only");
+      assert.equal((await reader.finish("first", result)).externalAccountId, "456");
+      await assert.rejects(writer.finish("first", result), /INVALID_CHANNEL_CONNECT_STATE/);
+      assert.equal(await reader.claim("first", "browser", "etsy"), undefined);
+      const row = (await coordinator.query("SELECT * FROM channel_connections WHERE id='etsy'")).rows[0];
+      assert.equal(row.status, "connected");
+      assert.deepEqual(row.credentials, result.credentials);
+      assert.deepEqual(row.metadata, result.publicMetadata);
+      for (const role of ["anon", "authenticated"]) {
+        if (!(await coordinator.query("SELECT 1 FROM pg_roles WHERE rolname=$1", [role])).rowCount) continue;
+        await a.query("BEGIN");
+        try {
+          // Grants exist only in this temporary schema and roll back with the test.
+          await a.query(`GRANT USAGE ON SCHEMA "${namespace}" TO "${role}"`);
+          await a.query(`GRANT SELECT ON channel_connections, channel_oauth_attempts TO "${role}"`);
+          await a.query(`SET LOCAL ROLE "${role}"`);
+          assert.equal((await a.query("SELECT count(*)::int AS n FROM channel_connections")).rows[0].n, 0);
+          assert.equal((await a.query("SELECT count(*)::int AS n FROM channel_oauth_attempts")).rows[0].n, 0);
+        } finally { await a.query("ROLLBACK"); }
+      }
+
+      await writer.start({ ...attempt, id: "expired", expiresAt: new Date(Date.now() - 1000) });
+      assert.equal(await reader.claim("expired", "browser", "etsy"), undefined);
+      await writer.start({ ...attempt, id: "old" });
+      await reader.claim("old", "browser", "etsy");
+      await writer.start({ ...attempt, id: "new" });
+      await assert.rejects(reader.finish("old", result), /INVALID_CHANNEL_CONNECT_STATE/);
+      await reader.claim("new", "browser", "etsy");
+      const disconnected = await writer.disconnect("workspace", "etsy");
+      assert.equal(disconnected?.status, "disconnected");
+      assert.equal(disconnected?.externalAccountId, undefined);
+      assert.deepEqual(disconnected?.metadata, {});
+      assert.deepEqual((await coordinator.query("SELECT credentials FROM channel_connections WHERE id='etsy'")).rows[0].credentials, {});
+      await assert.rejects(reader.finish("new", result), /INVALID_CHANNEL_CONNECT_STATE/);
+
+      await writer.start({ ...attempt, id: "changed" });
+      await reader.claim("changed", "browser", "etsy");
+      await coordinator.query("UPDATE channel_connections SET updated_at=clock_timestamp(),status='disconnected',credentials='{}' WHERE id='etsy'");
+      await assert.rejects(reader.finish("changed", result), /INVALID_CHANNEL_CONNECT_STATE/);
+      assert.equal((await coordinator.query("SELECT status FROM channel_connections WHERE id='etsy'")).rows[0].status, "disconnected");
+
+      await writer.start({ ...attempt, id: "rollback" });
+      await reader.claim("rollback", "browser", "etsy");
+      await coordinator.query(`CREATE FUNCTION fail_oauth() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN RAISE EXCEPTION 'injected OAuth failure'; END $$`);
+      await coordinator.query("CREATE TRIGGER fail_oauth BEFORE UPDATE ON channel_connections FOR EACH ROW EXECUTE FUNCTION fail_oauth()");
+      try {
+        await assert.rejects(reader.finish("rollback", result));
+        const row = (await coordinator.query("SELECT status,credentials FROM channel_connections WHERE id='etsy'")).rows[0];
+        assert.equal(row.status, "disconnected");
+        assert.deepEqual(row.credentials, {});
+        assert.equal(await writer.claim("rollback", "browser", "etsy"), undefined, "Failed save must not replay code exchange");
+      } finally { await coordinator.query("DROP TRIGGER fail_oauth ON channel_connections"); }
     });
   } finally {
     for (const client of clients) await client.query("ROLLBACK").catch(() => undefined);

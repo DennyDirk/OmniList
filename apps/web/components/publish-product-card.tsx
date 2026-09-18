@@ -12,6 +12,7 @@ import { publishFlowCopy } from "../lib/publish-flow-copy";
 import { ProductEditor } from "./product-editor";
 import { EbayPublishPreview } from "./ebay-publish-preview";
 import { PublishReviewError, readPublishAssessment } from "../lib/publish-review";
+import { bulkPublishCopy } from "../lib/bulk-publish-copy";
 
 export function PublishProductCard({ apiBaseUrl, product, connection, active, hasPublished, locale }: {
   apiBaseUrl: string; product: Product; connection?: ChannelConnection; active: boolean; hasPublished: boolean; locale: Locale;
@@ -29,6 +30,7 @@ export function PublishProductCard({ apiBaseUrl, product, connection, active, ha
   const [editing, setEditing] = useState(false);
   const [preview, setPreview] = useState(false);
   const [stale, setStale] = useState(false);
+  const [outcome, setOutcome] = useState<"queued" | "uncertain">();
   const staleMessage = locale === "ru" ? "Товар или магазин изменился. Обновите данные, повторите проверку и подтвердите новый preview."
     : locale === "uk" ? "Товар або магазин змінився. Оновіть дані, повторіть перевірку та підтвердьте новий preview."
     : "The product or store changed. Reload, check again and confirm the new preview.";
@@ -47,7 +49,7 @@ export function PublishProductCard({ apiBaseUrl, product, connection, active, ha
   ];
   const productIssues = assessment?.issues.filter(issue => issue.severity === "blocking") ?? [];
   const recommendations = assessment?.issues.filter(issue => issue.severity !== "blocking") ?? [];
-  const busy = phase !== "idle" || isPending || active;
+  const busy = phase !== "idle" || isPending || active || Boolean(outcome);
   const blocked = stale || !product.revision || editing || setupIssues.length > 0 || !assessment || !canPublishAssessment(assessment);
 
   function edit() {
@@ -106,14 +108,20 @@ export function PublishProductCard({ apiBaseUrl, product, connection, active, ha
         method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ channels: ["ebay"], productRevision: product.revision, connectionRevisions: { ebay: next.connectionRevision } })
       });
       if (!result.ok) {
+        if ([400, 401, 403, 404, 409].includes(result.status)) sending = false;
         if (result.status === 409) { setStale(true); setPreview(false); setAssessment(undefined); throw new Error(staleMessage); }
         const body = await result.json().catch(() => undefined) as { message?: string } | undefined;
         throw new Error(body?.message || dictionary.publishCard.enqueueFailed);
       }
+      setOutcome("queued"); setPreview(false);
       showFlash({ tone: "success", message: dictionary.publishCard.enqueueSuccess });
       startTransition(() => router.refresh());
     } catch (err) {
-      setErrors([err instanceof Error ? err.message : sending ? dictionary.publishCard.enqueueFailed : text.checkFailed]);
+      if (sending) {
+        setOutcome("uncertain"); setPreview(false);
+        setErrors([bulkPublishCopy[locale].uncertain]);
+        startTransition(() => router.refresh());
+      } else setErrors([err instanceof Error ? err.message : text.checkFailed]);
     } finally {
       setPhase("idle");
       lock.current = false;
@@ -149,7 +157,10 @@ export function PublishProductCard({ apiBaseUrl, product, connection, active, ha
     </div> : null}
     {errors.length ? <div className="issue blocking" role="alert"><ul>{errors.map(error => <li key={error}>{error}</li>)}</ul><Link className="text-link" href={`/products/${product.id}/edit`}>{text.productFix}</Link></div> : null}
     {active ? <p role="status">{text.pending}</p> : <p className="field-hint">{text.checkHint}</p>}
-    {preview && !blocked ? <section className="listing-section" aria-label={flow.preview}>
+    {outcome ? <div role="status">
+      {outcome === "queued" ? <p>{dictionary.publishCard.enqueueSuccess}</p> : null}
+      <button className="button-secondary" type="button" onClick={() => window.location.reload()}>{bulkPublishCopy[locale].reload}</button>
+    </div> : preview && !blocked ? <section className="listing-section" aria-label={flow.preview}>
       <h3>{flow.preview}</h3><p className="field-hint">{flow.hint}</p>
       <EbayPublishPreview product={product} locale={locale} />
       <button className="button-secondary" type="button" disabled={busy} onClick={() => setPreview(false)}>{flow.back}</button>

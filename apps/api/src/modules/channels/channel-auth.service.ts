@@ -4,8 +4,13 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import type { ChannelConnectionRepository } from "./channel-connections.repository";
 import { createChannelAuthRegistry } from "./adapters/channel-auth-registry";
 import type { ApiEnv } from "../../config/env";
+import type { ChannelOAuthAttemptRepository } from "./channel-oauth-attempts.repository";
+import { createEtsyConnectionService } from "./etsy-connection.service";
 
 export const CHANNEL_CONNECT_STATE_COOKIE_NAME = "omnilist-channel-connect-state";
+export function channelConnectCookieName(channelId: string) {
+  return channelId === "etsy" ? "omnilist-etsy-connect-state" : CHANNEL_CONNECT_STATE_COOKIE_NAME;
+}
 
 interface ChannelConnectState {
   workspaceId: string;
@@ -91,15 +96,23 @@ function verifyConnectState(secret: string, token?: string): SignedChannelConnec
   }
 }
 
-export function createChannelAuthService(repository: ChannelConnectionRepository, env: ApiEnv) {
+export function createChannelAuthService(repository: ChannelConnectionRepository, env: ApiEnv, attempts?: ChannelOAuthAttemptRepository) {
   const registry = createChannelAuthRegistry(env);
   const secret = getChannelConnectSecret(env);
+  const etsy = createEtsyConnectionService(repository, env, attempts);
 
   return {
     listCapabilities(): ChannelConnectionCapability[] {
-      return registry.listCapabilities();
+      return registry.listCapabilities().map(item => item.channelId === "etsy"
+        ? { channelId: "etsy", connectionMode: "oauth", enabled: etsy.isConfigured(), providerLabel: "Etsy OAuth" }
+        : item);
     },
-    beginConnection(workspaceId: string, channelId: ChannelId) {
+    async disconnectEtsy(workspaceId: string) {
+      if (!attempts) throw new Error("CHANNEL_CONNECTOR_NOT_CONFIGURED");
+      return attempts.disconnect(workspaceId, "etsy");
+    },
+    async beginConnection(workspaceId: string, channelId: ChannelId) {
+      if (channelId === "etsy") return etsy.beginConnection(workspaceId);
       const adapter = registry.getAdapter(channelId);
 
       if (!adapter || !adapter.isConfigured()) {
@@ -125,10 +138,13 @@ export function createChannelAuthService(repository: ChannelConnectionRepository
     },
     async completeConnection(input: {
       channelId: ChannelId;
-      code: string;
+      code?: string;
+      error?: string;
       returnedState: string;
       stateCookieValue?: string;
     }) {
+      if (input.channelId === "etsy") return etsy.completeConnection(input);
+      if (!input.code) throw new Error("MISSING_CHANNEL_CONNECT_PARAMS");
       const verifiedState = verifyConnectState(secret, input.returnedState);
       const decodedState = decodeConnectState(input.stateCookieValue);
       const workspaceId = verifiedState?.workspaceId;

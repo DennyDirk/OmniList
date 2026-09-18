@@ -184,6 +184,8 @@ async function proxyRequest(request: NextRequest, path: string[]) {
   if (responseContentType) {
     response.headers.set("content-type", responseContentType);
   }
+  response.headers.set("cache-control", "no-store");
+  if (path.includes("connect")) response.headers.set("referrer-policy", "no-referrer");
 
   applyResponseCookies(supabaseResponse, response);
   applySetCookieHeaders(request, response, upstreamResponse);

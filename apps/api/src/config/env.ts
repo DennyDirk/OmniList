@@ -9,6 +9,8 @@ export interface ApiEnv {
   ebayRedirectUriName?: string;
   ebayEnvironment: "sandbox" | "production";
   ebayScopes: string[];
+  etsyKeystring?: string;
+  etsySharedSecret?: string;
   supabaseUrl?: string;
   supabaseServiceRoleKey?: string;
   supabaseStorageBucket: string;
@@ -38,6 +40,8 @@ export function getEnv(): ApiEnv {
     ebayRedirectUriName: process.env.EBAY_REDIRECT_URI_NAME,
     ebayEnvironment: process.env.EBAY_ENVIRONMENT === "production" ? "production" : "sandbox",
     ebayScopes: [...new Set([...defaultEbayScopes, ...configuredEbayScopes])],
+    etsyKeystring: process.env.ETSY_KEYSTRING?.trim(),
+    etsySharedSecret: process.env.ETSY_SHARED_SECRET?.trim(),
     supabaseUrl: process.env.SUPABASE_URL,
     supabaseServiceRoleKey: process.env.SUPABASE_SERVICE_ROLE_KEY,
     supabaseStorageBucket: process.env.SUPABASE_STORAGE_BUCKET ?? "product-images"

@@ -28,7 +28,8 @@ import { ListingOwnershipError } from "./modules/publishing/channel-listings.rep
 import { createEbayCatalogService, EbayCatalogError } from "./modules/catalog/ebay-catalog.service";
 import { createChannelConnectionRepository } from "./modules/channels/channel-connections.repository";
 import { createChannelConnectionsService } from "./modules/channels/channel-connections.service";
-import { CHANNEL_CONNECT_STATE_COOKIE_NAME, createChannelAuthService } from "./modules/channels/channel-auth.service";
+import { channelConnectCookieName, createChannelAuthService } from "./modules/channels/channel-auth.service";
+import { createChannelOAuthAttemptRepository } from "./modules/channels/channel-oauth-attempts.repository";
 import { listChannels } from "./modules/channels/channels.service";
 import { ensureValidEbayAccessToken, getEbaySellerSetupOptions } from "./modules/channels/adapters/ebay-client";
 import { EbayPreparationError, getEbayCategoryRequirements } from "./modules/channels/adapters/ebay-category";
@@ -61,7 +62,10 @@ function normalizeChannelIds(value: unknown): ChannelId[] {
 
 export async function buildApp() {
   const env = getEnv();
-  const app = Fastify({ logger: true });
+  const app = Fastify({ logger: { serializers: {
+    // Authorization callbacks contain short-lived credentials, never log their query.
+    req(request) { return { method: request.method, url: request.url?.split("?")[0], id: request.id }; }
+  } } });
   const db = env.databaseUrl ? createDbClient(env.databaseUrl) : undefined;
   const workspaceRepository = createWorkspaceRepository(db);
   const authService = createAuthService(env, workspaceRepository, db);
@@ -76,7 +80,7 @@ export async function buildApp() {
   const ebayCatalogService = createEbayCatalogService(channelConnectionRepository, env);
   const inventoryService = createInventoryService(productRepository, inventoryRepository);
   const channelConnectionsService = createChannelConnectionsService(channelConnectionRepository);
-  const channelAuthService = createChannelAuthService(channelConnectionRepository, env);
+  const channelAuthService = createChannelAuthService(channelConnectionRepository, env, db ? createChannelOAuthAttemptRepository(db) : undefined);
   const listingRepository = createChannelListingRepository(db);
   const publishingService = createPublishingService(publishJobRepository, channelConnectionRepository, env, listingRepository);
   app.addHook("onReady", async () => { publishingService.startWorker(); });
@@ -254,12 +258,15 @@ export async function buildApp() {
       }
 
       const params = request.params as { channelId: ChannelId };
-      const result = channelAuthService.beginConnection(session.workspace.id, params.channelId);
+      const result = await channelAuthService.beginConnection(session.workspace.id, params.channelId);
 
-      reply.setCookie(CHANNEL_CONNECT_STATE_COOKIE_NAME, result.stateCookieValue, {
+      reply.header("Cache-Control", "no-store");
+      reply.setCookie(channelConnectCookieName(params.channelId), result.stateCookieValue, {
         httpOnly: true,
         path: "/",
-        sameSite: "lax"
+        sameSite: "lax",
+        secure: env.publicWebUrl.startsWith("https:"),
+        maxAge: 600
       });
 
       return reply.redirect(result.authorizationUrl);
@@ -270,43 +277,51 @@ export async function buildApp() {
         });
       }
 
+      if ((request.params as { channelId: string }).channelId === "etsy") {
+        request.log.warn({ event: "etsy_connect_start_failed" }, "Etsy connection could not be started");
+        return reply.redirect(`${env.publicWebUrl}/channels?error=ETSY_CONNECT_FAILED`);
+      }
+
       throw error;
     }
   });
 
   app.get("/channel-connections/:channelId/connect/callback", async (request, reply) => {
+    const params = request.params as { channelId: ChannelId };
+    reply.header("Cache-Control", "no-store");
+    reply.header("Referrer-Policy", "no-referrer");
+    reply.clearCookie(channelConnectCookieName(params.channelId), { path: "/" });
     try {
-      const params = request.params as { channelId: ChannelId };
-      const query = request.query as { code?: string; state?: string };
+      const query = request.query as { code?: string; state?: string; error?: string };
 
-      if (!query.code || !query.state) {
+      if (typeof query.state !== "string" || (typeof query.code !== "string" && typeof query.error !== "string")) {
         return reply.redirect(`${env.publicWebUrl}/channels?error=${encodeURIComponent("MISSING_CHANNEL_CONNECT_PARAMS")}`);
       }
 
       await channelAuthService.completeConnection({
         channelId: params.channelId,
         code: query.code,
+        error: query.error,
         returnedState: query.state,
-        stateCookieValue: request.cookies[CHANNEL_CONNECT_STATE_COOKIE_NAME]
-      });
-
-      reply.clearCookie(CHANNEL_CONNECT_STATE_COOKIE_NAME, {
-        path: "/"
+        stateCookieValue: request.cookies[channelConnectCookieName(params.channelId)]
       });
 
       return reply.redirect(`${env.publicWebUrl}/channels?connected=${encodeURIComponent(params.channelId)}`);
     } catch (error) {
-      reply.clearCookie(CHANNEL_CONNECT_STATE_COOKIE_NAME, {
-        path: "/"
-      });
-
       if (
         error instanceof Error &&
-        ["INVALID_CHANNEL_CONNECT_STATE", "CHANNEL_CONNECTOR_NOT_CONFIGURED", "EBAY_TOKEN_EXCHANGE_FAILED"].includes(
+        ["INVALID_CHANNEL_CONNECT_STATE", "CHANNEL_CONNECTOR_NOT_CONFIGURED", "EBAY_TOKEN_EXCHANGE_FAILED",
+          "MISSING_CHANNEL_CONNECT_PARAMS", "ETSY_TOKEN_EXCHANGE_FAILED", "ETSY_SHOP_NOT_FOUND",
+          "ETSY_SHOP_LOOKUP_FAILED", "ETSY_MISSING_SCOPES", "ETSY_CONNECT_CANCELLED"].includes(
           error.message
         )
       ) {
         return reply.redirect(`${env.publicWebUrl}/channels?error=${encodeURIComponent(error.message)}`);
+      }
+
+      if (params.channelId === "etsy") {
+        request.log.warn({ event: "etsy_connect_failed" }, "Etsy connection could not be saved");
+        return reply.redirect(`${env.publicWebUrl}/channels?error=ETSY_CONNECT_FAILED`);
       }
 
       throw error;
@@ -321,6 +336,7 @@ export async function buildApp() {
       }
 
       const params = request.params as { channelId: ChannelId };
+      if (params.channelId === "etsy") return reply.code(400).send({ message: "Use Etsy Connect to manage this connection." });
       const input = channelConnectionUpsertInputSchema.parse(request.body);
       const connection = await channelConnectionsService.upsertConnection(session.workspace.id, params.channelId, input);
 
@@ -346,6 +362,7 @@ export async function buildApp() {
     }
 
     const params = request.params as { channelId: ChannelId };
+    if (params.channelId === "etsy") return { item: await channelAuthService.disconnectEtsy(session.workspace.id) };
     const connection = await channelConnectionsService.disconnectConnection(session.workspace.id, params.channelId);
 
     return {
