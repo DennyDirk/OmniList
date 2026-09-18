@@ -128,7 +128,21 @@ export const channelConnectionsTable = pgTable("channel_connections", {
   credentials: jsonb("credentials").$type<Record<string, string>>().notNull(),
   createdAt: timestamp("created_at", { withTimezone: true }).defaultNow().notNull(),
   updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull()
-});
+}).enableRLS();
+
+export const channelOAuthAttemptsTable = pgTable("channel_oauth_attempts", {
+  id: varchar("id", { length: 64 }).primaryKey(),
+  workspaceId: varchar("workspace_id", { length: 64 }).notNull().references(() => workspacesTable.id),
+  channelId: varchar("channel_id", { length: 32 }).notNull(),
+  connectionId: varchar("connection_id", { length: 64 }).notNull().references(() => channelConnectionsTable.id),
+  connectionVersion: text("connection_version").notNull(),
+  browserHash: varchar("browser_hash", { length: 64 }).notNull(),
+  verifier: text("verifier").notNull(),
+  expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
+  claimedAt: timestamp("claimed_at", { withTimezone: true })
+}, table => ({
+  scope: uniqueIndex("channel_oauth_attempt_scope").on(table.workspaceId, table.channelId)
+})).enableRLS();
 
 export const channelListingsTable = pgTable("channel_listings", {
   id: varchar("id", { length: 64 }).primaryKey(),

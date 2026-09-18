@@ -6,6 +6,7 @@ import type { Channel, ChannelConnection, ChannelConnectionCapability } from "@o
 import { dictionaries, formatConnectionStatus, type Locale } from "../lib/i18n";
 import { publishCopy } from "../lib/publish-copy";
 import { useFlash } from "./flash-provider";
+import { EtsyConnectionCard } from "./etsy-connection-card";
 
 interface Option { id: string; label: string; detail?: string }
 interface SetupOptions {
@@ -121,6 +122,9 @@ export function ChannelConnectionManager({ apiBaseUrl, capabilities, initialConn
       </>}
       {error ? <p className="issue blocking" role="alert">{error}</p> : null}
     </section>
+    <EtsyConnectionCard apiBaseUrl={apiBaseUrl} locale={locale}
+      connection={initialConnections.find(item => item.channelId === "etsy")}
+      enabled={Boolean(capabilities.find(item => item.channelId === "etsy")?.enabled)} />
     <p className="muted">{text.comingSoon}</p>
   </div>;
 }

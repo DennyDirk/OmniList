@@ -22,7 +22,7 @@ export function createChannelConnectionsService(repository: ChannelConnectionRep
       const connection = await repository.upsertConnection(workspaceId, channelId, {
         status: "disconnected",
         externalAccountId: undefined,
-        metadata: stripOAuthMetadata(existing?.metadata ?? {})
+        metadata: channelId === "etsy" ? {} : stripOAuthMetadata(existing?.metadata ?? {})
       });
 
       await repository.setCredentials(workspaceId, channelId, {});
