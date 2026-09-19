@@ -12,6 +12,7 @@ import { createProductImportRepository } from "../../apps/api/src/modules/catalo
 import { createChannelListingRepository, type ListingIdentity } from "../../apps/api/src/modules/publishing/channel-listings.repository";
 import { createPublishJobRepository } from "../../apps/api/src/modules/publishing/publishing.repository";
 import { createChannelOAuthAttemptRepository } from "../../apps/api/src/modules/channels/channel-oauth-attempts.repository";
+import { createEtsySessionRepository } from "../../apps/api/src/modules/channels/etsy-session.repository";
 
 // Explicit opt-in; never fall back to the application's DATABASE_URL.
 test("PostgreSQL product import and migration contracts", { skip: !process.env.TEST_DATABASE_URL }, async t => {
@@ -442,6 +443,30 @@ test("PostgreSQL product import and migration contracts", { skip: !process.env.T
         assert.deepEqual(row.credentials, {});
         assert.equal(await writer.claim("rollback", "browser", "etsy"), undefined, "Failed save must not replay code exchange");
       } finally { await coordinator.query("DROP TRIGGER fail_oauth ON channel_connections"); }
+    });
+    await t.test("Etsy token rotation is serialized across sessions and cannot restore disconnected access", async () => {
+      await reset();
+      const credentials = { shopId: "456", accessToken: "old", refreshToken: "old-refresh" };
+      await coordinator.query(`INSERT INTO channel_connections (id,workspace_id,channel_id,status,external_account_id,metadata,credentials)
+        VALUES ('etsy','workspace','etsy','connected','456','{}',$1)`, [JSON.stringify(credentials)]);
+      const first = createEtsySessionRepository(dbA), second = createEtsySessionRepository(dbB);
+      let unlock!: () => void;
+      let entered!: () => void;
+      const held = new Promise<void>(resolve => { unlock = resolve; });
+      const started = new Promise<void>(resolve => { entered = resolve; });
+      const refresh = first.authorize("workspace", async old => { entered(); await held; return { ...old, accessToken: "rotated" }; });
+      try {
+        await started;
+        await assert.rejects(second.authorize("workspace", async () => { assert.fail("Must not refresh concurrently"); }), /ETSY_CONNECTION_BUSY/);
+      } finally { unlock(); }
+      assert.equal((await refresh).credentials.accessToken, "rotated");
+      assert.equal((await second.authorize("workspace", async saved => {
+        assert.equal(saved.accessToken, "rotated"); return saved;
+      })).credentials.accessToken, "rotated");
+      await assert.rejects(second.authorize("other-workspace", async () => { assert.fail("Foreign workspace"); }), /ETSY_RECONNECT_REQUIRED/);
+      await createChannelOAuthAttemptRepository(dbA).disconnect("workspace", "etsy");
+      await assert.rejects(second.authorize("workspace", async () => { assert.fail("Disconnected"); }), /ETSY_RECONNECT_REQUIRED/);
+      assert.deepEqual((await coordinator.query("SELECT credentials FROM channel_connections WHERE id='etsy'")).rows[0].credentials, {});
     });
   } finally {
     for (const client of clients) await client.query("ROLLBACK").catch(() => undefined);

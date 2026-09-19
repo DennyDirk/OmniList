@@ -1,12 +1,30 @@
 # Development
 
-Обновлено: 2026-09-18.
+Обновлено: 2026-09-19.
 
 Единый рабочий план OmniList: важные требования, состояние реализации и следующие задачи. Пересмотрен по предоставленной пользователем стратегии `omnilist-product-strategy.md` от 2026-09-13 и текущему коду. Остальные MD сохраняются как история, а не конкурирующие планы. Конкурентные оценки из стратегии являются гипотезами, не доказанными преимуществами.
 
 ## 1. Продукт и границы
 
-### Текущий выпуск: завершение publishing-пилота eBay (2026-09-18)
+### Текущий срез: Etsy connection и read-only seller setup (2026-09-19)
+
+- [x] OAuth PKCE S256, случайные одноразовые state и browser binding, серверная попытка в PostgreSQL с TTL 10 минут. Новый Connect отменяет старую попытку; callback после claim нельзя обменять повторно. ID магазина определяется через владельца access token, вручную его вводить нельзя.
+- [x] Connected status и credentials сохраняются атомарно; disconnect очищает credentials, identity и незавершённую попытку. Неуспешный reconnect не заменяет прежний магазин. Callback/query и provider payload с секретами не попадают в API-логи.
+- [x] На текущем этапе только scope `shops_r`. Создание/активация объявлений не включены; для `listings_w` позже понадобится повторное согласие пользователя.
+- [x] `GET /channel-connections/etsy/setup-options`: реальные профили доставки, возвратов и обработки заказа; проверка владельца/магазина, runtime-схемы, bounded pagination processing profiles, отказ при дубликатах/неполных ответах. Ошибка Etsy не превращается в пустой каталог настроек.
+- [x] Обновление истёкшего токена сериализовано row lock между API-инстансами. Второй запрос получает контролируемый busy, а не повторно использует refresh token. Новые credentials сохраняются до чтения настроек; после чтения перепроверяется версия подключения. Автоматического retry после 401/403 нет, предлагается reconnect.
+- [x] Карточка Etsy: Connect/Reconnect/Disconnect, имя магазина, «Загрузить настройки», читаемые профили вместо сырых ID, понятные empty/error состояния на EN/RU/UK. Это просмотр, не автосохранение/выбор профилей и не обещание готовности к publish.
+- Проверено: 148/148 unit/regression тестов; 17/17 PostgreSQL-тестов (16 сценариев + родительский), включая OAuth replay, expiry, rollback, новую попытку, отключение, RLS и конкурентное обновление токена. SQL выполнялся только в случайной временной схеме без public fallback, схема удалена. Typecheck API/web/shared и production-сборки API/web прошли. Live OAuth/магазин Etsy и браузерный E2E нового setup UI ещё не проверены.
+- [x] Миграция `0013_channel_oauth_attempts.sql` применена 2026-09-19 к настроенной в `.env` Supabase БД отдельной транзакцией. Проверены колонки, уникальный индекс workspace/channel и RLS без браузерных policies на `channel_oauth_attempts` и `channel_connections`; результат подтверждён новым соединением после COMMIT. Роль подключения `postgres` владеет таблицами и имеет BYPASSRLS. Контрольные суммы и количества строк до/после совпали: 13 connections, 4 products, 25 jobs, 25 targets, 1 listing. Другие таблицы требуют отдельного security review.
+- Автомиграция в коде деплоя не настроена: API `build` выполняет `tsc`, `start` запускает Node, `bootstrapDatabase` не выполняет DDL. Команды в панели Render отдельно не проверялись. В этой БД по-прежнему нет `drizzle.__drizzle_migrations`; фиктивный baseline не создавался. Не добавлять слепой `npm run db:migrate` в deploy до сверки/нормализации истории миграций.
+
+**Настройка live-пилота:** добавить `ETSY_KEYSTRING` и `ETSY_SHARED_SECRET` только на API-сервере; `OMNILIST_WEB_URL` должен быть HTTPS origin веб-приложения. В Etsy App зарегистрировать точный callback `https://omni-list-web.vercel.app/api/proxy/channel-connections/etsy/connect/callback` (для другого домена заменить origin). Callback идёт через web proxy, не напрямую на Render, чтобы browser-binding cookie вернулась на тот же домен. 0013 уже применена к настроенной БД; после deploy выполнить Connect → consent → имя своего магазина → загрузка настроек → disconnect/reconnect. Это read-only пилот, ни одного листинга он не создаёт.
+
+**Далее:** taxonomy/properties + eligibility товара → выбор профилей из загруженных значений с сохранением overrides → assessment/preview → durable draft ID → фото → отдельное согласие на activation. Не расширять scopes и не включать publish до соответствующего этапа. Возможная потеря ответа refresh или сбой сохранения после него разрешается reconnect, а не предположением об успешной авторизации.
+
+Официальные контракты: [Etsy OAuth](https://developers.etsy.com/documentation/essentials/authentication/), [API reference](https://developers.etsy.com/documentation/reference/), [Processing profiles](https://developers.etsy.com/documentation/tutorials/migration/). Требования и endpoints проверены 2026-09-19; применение Etsy API к реальному магазину требует доступа приложения.
+
+### Предыдущий выпуск: завершение publishing-пилота eBay (2026-09-18)
 
 Этот статус заменяет прежние ограничения ниже о локальном bulk assessment и неподтверждённых последних правках worker. Исторические записи не являются новым списком обязательных задач.
 
@@ -82,7 +100,8 @@ Readiness / Compatibility Engine делает этот сценарий рабо
 | Реестр объявлений | ChannelListing, scope подключения/рынка/SKU, внешние ID, последняя успешная версия; SQL 0007 применён |
 | Безопасность publish | Claim/lease/executionId, needs_review, durable snapshots/checkpoints и проверка точного offer; unit/SQL fault-тесты. Реальный restart/Sandbox release-gate ещё открыт |
 | Очередь | Job/targets, Product snapshot и connection revision в БД; API worker возобновляет новые queued jobs и сверяет expired processing без replay внешних writes. Legacy/неоднозначные случаи не разблокируются автоматически |
-| Etsy / Shopify / CSV | Рабочих интеграций/импорта нет. Типы и preview не считаются готовой интеграцией |
+| Etsy | Реализованы OAuth PKCE, refresh и read-only seller setup; 0013 применена, live-проверка впереди. Публикация и импорт товаров пока недоступны |
+| Shopify / CSV | Рабочих интеграций/импорта нет. Типы и preview не считаются готовой интеграцией |
 | Просмотр каталога eBay | На `/channels/ebay/catalog` доступны активные объявления Trading API, детали и атомарный одиночный импорт. Уже импортированные/managed объявления получают localLink на Product вместо повторного импорта; браузерная проверка этого дополнения ещё нужна |
 | Остатки / заказы / AI | Только ручной остаток и история; синхронизации, заказов и AI resolution нет |
 
@@ -142,12 +161,15 @@ Readiness / Compatibility Engine делает этот сценарий рабо
 - [ ] После исправления повторять только неуспешную цель; для неопределённой публикации сначала кнопка проверки результата.
 - [ ] Проверить мобильный интерфейс, клавиатуру, ошибки сети и сценарий нового продавца без API Explorer.
 
-### P0.3. Etsy как второе направление — НЕ НАЧАТО
+### P0.3. Etsy как второе направление — В РАБОТЕ
 
 - [ ] Параллельно P0.1/P0.2 получить нужный доступ Etsy API и подходящий магазин; подтвердить ограничения приложения для пилота и публичного сервиса.
-- [ ] OAuth PKCE, одноразовая попытка, минимальные scopes, безопасный refresh.
+- [x] OAuth PKCE, одноразовая серверная попытка, минимальный shops_r, сериализованный refresh и atomic disconnect; контрактные и PostgreSQL-проверки.
+- [x] Применить 0013 и проверить сохранность данных/доступ backend-роли при включённом RLS.
+- [ ] Настроить Etsy-приложение, задеплоить код и пройти live OAuth/setup на подходящем магазине.
 - [ ] Eligibility: происхождение/участие продавца, тип товара и применимые ограничения; неподходящий товар блокируется, не «чинится» до Handmade.
-- [ ] Загрузить taxonomy/properties, доставку, возвраты и processing profiles; дать выбор по названиям.
+- [x] Read-only загрузка доставки, возвратов и processing profiles с названиями/описаниями и проверкой полноты.
+- [ ] Taxonomy/properties и выбор профилей по названиям в настройках товара с серверной проверкой актуальности перед сохранением/publish.
 - [ ] Подключить assessment и resolution к тем же UI-контрактам без копирования eBay-логики.
 - [ ] Draft → сохранить listing ID → изображения/характеристики → activation → проверка; учитывать платность и доступные тестовые возможности.
 - [ ] Сквозной тест подходящего товара: eBay успешен, Etsy требует исправления, retry Etsy не перепубликует eBay.
