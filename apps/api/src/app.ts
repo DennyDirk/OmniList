@@ -30,6 +30,8 @@ import { createChannelConnectionRepository } from "./modules/channels/channel-co
 import { createChannelConnectionsService } from "./modules/channels/channel-connections.service";
 import { channelConnectCookieName, createChannelAuthService } from "./modules/channels/channel-auth.service";
 import { createChannelOAuthAttemptRepository } from "./modules/channels/channel-oauth-attempts.repository";
+import { createEtsySessionRepository } from "./modules/channels/etsy-session.repository";
+import { createEtsySetupService } from "./modules/channels/etsy-setup.service";
 import { listChannels } from "./modules/channels/channels.service";
 import { ensureValidEbayAccessToken, getEbaySellerSetupOptions } from "./modules/channels/adapters/ebay-client";
 import { EbayPreparationError, getEbayCategoryRequirements } from "./modules/channels/adapters/ebay-category";
@@ -81,6 +83,7 @@ export async function buildApp() {
   const inventoryService = createInventoryService(productRepository, inventoryRepository);
   const channelConnectionsService = createChannelConnectionsService(channelConnectionRepository);
   const channelAuthService = createChannelAuthService(channelConnectionRepository, env, db ? createChannelOAuthAttemptRepository(db) : undefined);
+  const etsySetupService = createEtsySetupService(env, channelConnectionRepository, db ? createEtsySessionRepository(db) : undefined);
   const listingRepository = createChannelListingRepository(db);
   const publishingService = createPublishingService(publishJobRepository, channelConnectionRepository, env, listingRepository);
   app.addHook("onReady", async () => { publishingService.startWorker(); });
@@ -368,6 +371,24 @@ export async function buildApp() {
     return {
       item: connection
     };
+  });
+
+  app.get("/channel-connections/etsy/setup-options", async (request, reply) => {
+    const session = await getRequiredSession(request, reply);
+    if (!session) return;
+    reply.header("Cache-Control", "no-store");
+    try {
+      return { item: await etsySetupService.load(session.workspace.id) };
+    } catch (error) {
+      const safeCodes = ["ETSY_RECONNECT_REQUIRED", "ETSY_CONNECTION_CHANGED", "ETSY_CONNECTION_BUSY",
+        "ETSY_RATE_LIMITED", "ETSY_INVALID_RESPONSE", "ETSY_SETUP_INCOMPLETE", "ETSY_SETUP_FAILED",
+        "ETSY_REFRESH_FAILED", "CHANNEL_CONNECTOR_NOT_CONFIGURED"];
+      const code = error instanceof Error && safeCodes.includes(error.message) ? error.message : "ETSY_SETUP_FAILED";
+      // Database errors can include credential parameters; never log their raw payload.
+      request.log.warn({ event: "etsy_setup_failed", code }, "Could not load Etsy shop settings");
+      return reply.code(code === "ETSY_RECONNECT_REQUIRED" ? 409 : code === "ETSY_RATE_LIMITED" ? 429 : 503)
+        .send({ code, message: "Could not load Etsy shop settings. No listings were changed." });
+    }
   });
 
   app.get("/channel-connections/ebay/setup-options", async (request, reply) => {

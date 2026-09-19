@@ -2,14 +2,15 @@ import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { ApiEnv } from "../../../config/env";
 import type { ChannelOAuthCompletionResult } from "./channel-oauth.contract";
+import { createEtsyRequester } from "./etsy-http";
 
 // Connection-only slice. Listing write permissions will require fresh consent later.
 export const ETSY_CONNECT_SCOPES = ["shops_r"];
-const tokenSchema = z.object({
+export const etsyTokenSchema = z.object({
   access_token: z.string().regex(/^[1-9]\d*\..+$/),
   refresh_token: z.string().min(1),
   token_type: z.string().regex(/^Bearer$/i),
-  expires_in: z.number().int().positive(),
+  expires_in: z.number().int().positive().max(86400),
   scope: z.string()
 });
 const shopSchema = z.object({
@@ -25,23 +26,7 @@ export function createEtsyOAuthAdapter(env: ApiEnv, fetcher: typeof fetch = fetc
   if (webUrl.protocol !== "https:" || webUrl.username || webUrl.password || webUrl.pathname !== "/" || webUrl.search || webUrl.hash) return undefined;
   const redirectUri = `${webUrl.origin}/api/proxy/channel-connections/etsy/connect/callback`;
   const clientId = env.etsyKeystring;
-  const apiKey = `${clientId}:${env.etsySharedSecret}`;
-
-  async function request(url: string, init: RequestInit, errorCode: string) {
-    try {
-      const response = await fetcher(url, {
-        ...init, redirect: "error", signal: AbortSignal.timeout(15_000),
-        headers: { Accept: "application/json", "x-api-key": apiKey, ...init.headers }
-      });
-      if (response.status === 404 && errorCode === "ETSY_SHOP_LOOKUP_FAILED") throw new Error("ETSY_SHOP_NOT_FOUND");
-      if (!response.ok) throw new Error(errorCode);
-      return await response.json();
-    } catch (error) {
-      // Never surface OAuth codes, tokens, request bodies or provider error echoes.
-      if (error instanceof Error && error.message === "ETSY_SHOP_NOT_FOUND") throw error;
-      throw new Error(errorCode);
-    }
-  }
+  const request = createEtsyRequester(env, fetcher);
 
   return {
     beginConnection(state: string, verifier: string) {
@@ -53,7 +38,7 @@ export function createEtsyOAuthAdapter(env: ApiEnv, fetcher: typeof fetch = fetc
       return `https://www.etsy.com/oauth/connect?${query}`;
     },
     async completeConnection(code: string, verifier: string): Promise<ChannelOAuthCompletionResult> {
-      const result = tokenSchema.safeParse(await request("https://api.etsy.com/v3/public/oauth/token", {
+      const result = etsyTokenSchema.safeParse(await request("https://api.etsy.com/v3/public/oauth/token", {
         method: "POST", headers: { "Content-Type": "application/x-www-form-urlencoded" },
         body: new URLSearchParams({ grant_type: "authorization_code", client_id: clientId, redirect_uri: redirectUri, code, code_verifier: verifier })
       }, "ETSY_TOKEN_EXCHANGE_FAILED"));
