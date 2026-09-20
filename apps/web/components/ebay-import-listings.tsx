@@ -164,7 +164,7 @@ export function EbayImportListings({ apiBaseUrl, locale }: {
           {!page && (
             <>
               {" "}
-              <a href="/channels">Reconnect eBay</a>
+              <a href="/channels#ebay">Reconnect eBay</a>
             </>
           )}
         </p>

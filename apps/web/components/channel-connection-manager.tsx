@@ -7,6 +7,7 @@ import { dictionaries, formatConnectionStatus, type Locale } from "../lib/i18n";
 import { publishCopy } from "../lib/publish-copy";
 import { useFlash } from "./flash-provider";
 import { EtsyConnectionCard } from "./etsy-connection-card";
+import { storeCopy } from "../lib/store-copy";
 
 interface Option { id: string; label: string; detail?: string }
 interface SetupOptions {
@@ -89,8 +90,8 @@ export function ChannelConnectionManager({ apiBaseUrl, capabilities, initialConn
   const disabled = Boolean(busy) || isPending;
   function connect() { if (!disabled) { setBusy("connect"); window.location.assign(apiBaseUrl + "/channel-connections/ebay/connect/start"); } }
   return <div className="listing-connections">
-    <section className="card">
-      <div className="row"><h2>eBay</h2><span className={"pill " + (connected ? "ready" : "attention")}>{formatConnectionStatus(dictionary, connection?.status ?? "disconnected")}</span></div>
+    <section id="ebay" className="card" aria-labelledby="ebay-connection-title">
+      <div className="row"><h2 id="ebay-connection-title">eBay</h2><span className={"pill " + (connected ? "ready" : "attention")}>{formatConnectionStatus(dictionary, connection?.status ?? "disconnected")}</span></div>
       <p>{connection?.externalAccountId || text.connect}</p>
       <p className="pill">{metadata.environment === "sandbox" ? text.sandbox : metadata.environment === "production" ? text.production : text.environmentUnknown} / {metadata.marketplaceId} / {metadata.currency}</p>
       {metadata.marketplaceId !== "EBAY_US" || metadata.currency !== "USD" ? <p className="issue blocking">{text.unsupportedMarket}</p> : null}
@@ -125,6 +126,9 @@ export function ChannelConnectionManager({ apiBaseUrl, capabilities, initialConn
     <EtsyConnectionCard apiBaseUrl={apiBaseUrl} locale={locale}
       connection={initialConnections.find(item => item.channelId === "etsy")}
       enabled={Boolean(capabilities.find(item => item.channelId === "etsy")?.enabled)} />
-    <p className="muted">{text.comingSoon}</p>
+    <section className="card" aria-labelledby="shopify-connection-title">
+      <div className="row"><h2 id="shopify-connection-title">Shopify</h2><span className="pill">{storeCopy[locale].upcoming}</span></div>
+      <p className="muted">{storeCopy[locale].shopify}</p>
+    </section>
   </div>;
 }

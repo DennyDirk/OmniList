@@ -67,8 +67,8 @@
 .listing-result-message { font-size: .9rem; line-height: 1.6; overflow-wrap: anywhere; }
 .listing-stock { margin-top: 24px; }
 .listing-stock .card { box-shadow: none; }
-.listing-connections { max-width: 760px; }
-.listing-connections > .card { padding: 28px; }
+.listing-connections { max-width: 760px; display: grid; gap: 20px; }
+.listing-connections > .card { padding: 28px; scroll-margin-top: 130px; }
 .listing-connections .listing-section { border-top: 1px solid var(--line); margin-top: 20px; padding-top: 8px; }
 .listing-connections .listing-fieldset { margin-block: 18px; }
 .listing-catalog { display: grid; gap: 14px; }

@@ -111,7 +111,7 @@ export function BulkPublishCard({ apiBaseUrl, products, connections, activeProdu
     <div className="listing-section">
       <strong>eBay {connection?.externalAccountId}</strong>
       {knownEnvironment ? <><span className={"pill " + (environment === "sandbox" ? "attention" : "ready")}>{environment === "sandbox" ? store.sandbox : store.production}</span><p className="field-hint">{environment === "sandbox" ? store.sandboxHint : store.productionHint}</p></> : <p>{connection ? store.environmentUnknown : store.connect}</p>}
-      <Link className="text-link" href="/channels">{store.storeFix}</Link>
+      <Link className="text-link" href="/channels#ebay">{store.storeFix}</Link>
     </div>
     <fieldset className="bulk-selection" disabled={busy || preview}>
       <legend>{text.select} ({selected.length}/20)</legend>

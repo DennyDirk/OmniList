@@ -62,7 +62,7 @@ export function EbayCatalogPreview({ apiBaseUrl, locale }: {
     <button type="button" className="button-primary" disabled={loading} onClick={() => void load(source === "active" ? 1 : 0)}>
       {loading ? copy.loading : copy.load}
     </button>
-    {error ? <p role="alert" className="banner error">{copy.error} <a href="/channels">{copy.connect}</a></p> : null}
+    {error ? <p role="alert" className="banner error">{copy.error} <a href="/channels#ebay">{copy.connect}</a></p> : null}
     <div aria-live="polite">
       {activePage ? <>
         <p><strong>{activePage.environment === "sandbox" ? "Sandbox" : "Production"}</strong> · {copy.importSource}</p>
