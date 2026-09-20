@@ -9,6 +9,7 @@ import { formatConnectionStatus, formatPublishJobStatus } from "../lib/i18n";
 import { getI18n } from "../lib/i18n.server";
 import { publishCopy } from "../lib/publish-copy";
 import { ebayCatalogCopy } from "../lib/ebay-catalog-copy";
+import { storeCopy } from "../lib/store-copy";
 
 export default async function DashboardPage() {
   const { dictionary, locale } = await getI18n();
@@ -21,7 +22,7 @@ export default async function DashboardPage() {
     <PublishJobRefresh active={jobs.some(job => job.status === "queued" || job.status === "processing")} locale={locale} />
     <header className="listing-header">
       <div className="row"><h1>{text.catalog} <span className="pill">{products.length}</span></h1><Link className="button-primary" href="/products/new">{text.create}</Link></div>
-      <div className="row listing-store-bar"><span>eBay / {formatConnectionStatus(dictionary, ebay?.status ?? "disconnected")}{ebay?.metadata.environment === "sandbox" ? " / Sandbox" : ""}</span><Link className="text-link" href="/channels">{text.storeFix}</Link></div>
+      <div className="row listing-store-bar"><span>eBay / {formatConnectionStatus(dictionary, ebay?.status ?? "disconnected")}{ebay?.metadata.environment === "sandbox" ? " / Sandbox" : ""}</span><Link className="text-link" href="/channels">{storeCopy[locale].manage}</Link></div>
     </header>
     {ebay?.status === "connected" ? <p><Link className="text-link" href={{ pathname: "/channels/ebay/catalog" }}>{ebayCatalogCopy[locale].title}</Link></p> : null}
     <section className="listing-catalog" aria-label={text.catalog}>

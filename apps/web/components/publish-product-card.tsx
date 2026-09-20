@@ -135,13 +135,13 @@ export function PublishProductCard({ apiBaseUrl, product, connection, active, ha
       <strong>{text.store}</strong>
       <p className="field-hint">{text.storeHint}</p>
       {setupIssues.length ? <div className="issue warning">{setupIssues.map(issue => <p key={issue}>{issue}</p>)}</div> : <p className="muted">{connection?.externalAccountId}<br />{text.setupReady}</p>}
-      <Link className="text-link" href="/channels">{text.storeFix}</Link>
+      <Link className="text-link" href="/channels#ebay">{text.storeFix}</Link>
     </div>
     <div className="listing-section" aria-live="polite" aria-busy={phase === "checking"}>
       <strong>{phase === "checking" ? text.checking : assessment ? checks[assessment.status] : checks.initial}</strong>
       {assessment ? <p className="field-hint">{checks.checked}: {new Date(assessment.checkedAt).toLocaleTimeString(locale)}</p> : null}
       {productIssues.length ? <ul>{productIssues.map((issue, index) => <li key={`${issue.code}-${index}`}>
-        {issue.message} {issue.field === "connection" ? <Link className="text-link" href="/channels">{text.storeFix}</Link> :
+        {issue.message} {issue.field === "connection" ? <Link className="text-link" href="/channels#ebay">{text.storeFix}</Link> :
           <button type="button" className="button-secondary" disabled={busy} onClick={edit}>{flow.edit}</button>}
       </li>)}</ul> : null}
       {recommendations.length ? <details><summary>{checks.suggestions}</summary><ul>{recommendations.map((issue, index) => <li key={index}>{issue.message}</li>)}</ul></details> : null}

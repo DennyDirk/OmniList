@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { etsySetupOptionsSchema, type EtsySetupOptions, type ChannelConnection } from "@omnilist/shared";
 import { dictionaries, formatConnectionStatus, type Locale } from "../lib/i18n";
 import { etsyCopy, etsySetupError } from "../lib/etsy-copy";
+import { etsyConnectionView } from "../lib/etsy-connection-view";
 import { useFlash } from "./flash-provider";
 
 export function EtsyConnectionCard({ apiBaseUrl, connection, enabled, locale }: {
@@ -27,9 +28,10 @@ export function EtsyConnectionCard({ apiBaseUrl, connection, enabled, locale }: 
     return () => { generation.current++; };
   }, [connection]);
   const connected = connection?.status === "connected";
+  const view = etsyConnectionView(enabled, connection?.status);
   const disabled = busy || pending;
   async function loadSetup() {
-    if (disabled || lock.current || !connection) return;
+    if (disabled || lock.current || !connection || !view.canReadSetup) return;
     lock.current = true; setBusy(true); setLoadingSetup(true); setSetup(undefined); setSetupError("");
     const requestGeneration = generation.current;
     try {
@@ -69,17 +71,18 @@ export function EtsyConnectionCard({ apiBaseUrl, connection, enabled, locale }: 
       showFlash({ tone: "error", message: dictionary.channelManager.couldNotDisconnect });
     } finally { lock.current = false; setBusy(false); }
   }
-  return <section className="card" aria-labelledby="etsy-connection-title">
-    <div className="row"><h2 id="etsy-connection-title">Etsy</h2><span className={"pill " + (connected ? "ready" : "attention")}>{formatConnectionStatus(dictionary, connection?.status ?? "disconnected")}</span></div>
-    <p>{connected ? connection.metadata.shopName || "Etsy" : copy.hint}</p>
-    <p className="muted">{connected ? copy.next : copy.scope}</p>
-    {!enabled ? <p className="issue warning">{copy.unavailable}</p> : null}
-    <div className="hero-actions">
-      <button type="button" className="button-primary" disabled={disabled || !enabled} onClick={connect}>{connected ? dictionary.channelManager.reconnectChannel : dictionary.channelManager.connectChannel}</button>
-      {connected ? <button type="button" className="button-secondary" disabled={disabled} onClick={() => void disconnect()}>{dictionary.channelManager.disconnectChannel}</button> : null}
-    </div>
+  return <section id="etsy" className="card" aria-labelledby="etsy-connection-title">
+    <div className="row"><h2 id="etsy-connection-title">Etsy</h2><span className={"pill " + (view.badge === "connected" ? "ready" : view.badge === "attention_required" ? "attention" : "")}>{view.badge === "connected" || view.badge === "attention_required" ? formatConnectionStatus(dictionary, view.badge) : copy[view.badge]}</span></div>
+    {connected ? <p>{connection.metadata.shopName || "Etsy"}</p> : enabled ? <p>{copy.hint}</p> : null}
+    <p className="muted">{!enabled ? (connected ? copy.interruptedHint : copy.unavailableHint) : connected ? copy.next : copy.scope}</p>
+    {view.badge === "attention_required" ? <p className="issue warning">{copy.reconnect}</p> : null}
+    {enabled && !connected ? <p className="field-hint">{copy.publishingLater}</p> : null}
+    {view.canConnect || view.canDisconnect ? <div className="hero-actions">
+      {view.canConnect ? <button type="button" className="button-primary" disabled={disabled} onClick={connect}>{connected ? dictionary.channelManager.reconnectChannel : dictionary.channelManager.connectChannel}</button> : null}
+      {view.canDisconnect ? <button type="button" className="button-secondary" disabled={disabled} onClick={() => void disconnect()}>{dictionary.channelManager.disconnectChannel}</button> : null}
+    </div> : null}
     {connected ? <p className="field-hint">{copy.disconnect}</p> : null}
-    {connected ? <div className="listing-section">
+    {view.canReadSetup ? <div className="listing-section">
       <h3>{copy.setupTitle}</h3><p className="field-hint">{copy.setupHint}</p>
       <button type="button" className="button-secondary" disabled={disabled || !enabled} onClick={() => void loadSetup()}>{loadingSetup ? copy.loadingSetup : copy.loadSetup}</button>
       {setupError ? <p className="issue blocking" role="alert">{setupError}</p> : null}

@@ -6,7 +6,8 @@ import { getChannelCapabilities, getChannelConnections, getChannels, getClientAp
 import { getI18n } from "../../lib/i18n.server";
 import { publishCopy } from "../../lib/publish-copy";
 import { ebayCatalogCopy } from "../../lib/ebay-catalog-copy";
-import { etsyCopy, etsyConnectionError } from "../../lib/etsy-copy";
+import { etsyConnectionError } from "../../lib/etsy-copy";
+import { storeCopy } from "../../lib/store-copy";
 
 export default async function ChannelsPage({ searchParams }: {
   searchParams?: Promise<Record<string, string | string[] | undefined>>;
@@ -23,7 +24,12 @@ export default async function ChannelsPage({ searchParams }: {
     : connected ? dictionary.channelManager.connectedChannel(channelName(connected))
     : disconnected ? dictionary.channelManager.disconnectedChannel(channelName(disconnected)) : undefined;
   return <main className="shell listing-shell">
-    <header className="listing-header"><Link className="text-link" href="/">{publishCopy[locale].catalog}</Link><h1>{etsyCopy[locale].channels}</h1></header>
+    <header className="listing-header">
+      <Link className="text-link" href="/">{publishCopy[locale].catalog}</Link>
+      <h1>{storeCopy[locale].title}</h1>
+      <p>{storeCopy[locale].intro}</p>
+      <p className="field-hint">{storeCopy[locale].availability}</p>
+    </header>
     {message ? <FlashOnMount clearQueryKeys={["connected", "disconnected", "error"]} message={message} tone={error ? "error" : "success"} /> : null}
     <ChannelConnectionManager apiBaseUrl={getClientApiBaseUrl()} capabilities={capabilities} channels={channels} initialConnections={connections} locale={locale} />
     {connections.some(connection => connection.channelId === "ebay" && connection.status === "connected")
